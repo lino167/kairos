@@ -26,3 +26,21 @@ Thumbs.db
 # Arquivos de configuração local
 .env
 config.local.py
+
+# Arquivos de resultados e testes
+bet365_*.json
+bet365_*.html
+bet365_*.png
+*_results.json
+*_test.html
+*_analysis.html
+*_debug*.html
+
+# Arquivos de demonstração e teste
+demo_*.py
+test_*.py
+analyze_*.py
+debug_*.py
+explore_*.py
+investigate_*.py
+find_*.py
