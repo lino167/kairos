@@ -156,62 +156,137 @@ def main():
     """
     pass
 
-def find_significant_drop(tables, threshold=10.0):
+def process_tables_for_opportunity(tables, match_id, threshold=10.0):
     """
-    Procura por drops significativos nas tabelas extraídas.
+    Processa tabelas aplicando regras de negócio para encontrar oportunidades KAIROS.
+    Diferencia tabelas pré-live (para coletar odds iniciais) das ao vivo (para análise de drops).
     
     Args:
         tables (list): Lista de DataFrames
-        threshold (float): Limiar mínimo para considerar um drop significativo
-                          Para colunas Drop: valores absolutos (ex: 0.5 para 50%)
-                          Para colunas %: valores em percentual (ex: 10.0 para 10%)
+        match_id (str): ID do match para identificação
+        threshold (float): Limiar mínimo para considerar um drop significativo (em %)
         
     Returns:
-        tuple: (bool, DataFrame ou None) - True se encontrou oportunidade, False caso contrário
+        dict: {
+            'opportunity': DataFrame ou None,
+            'prelive_odds': dict com odds iniciais das tabelas pré-live
+        }
     """
-    target_columns = ['drop', 'sharp', 'home%', 'away%', 'sharpness']
     
-    for table in tables:
+    prelive_odds = {}
+    
+    for i, table in enumerate(tables):
         if table is None or table.empty:
             continue
             
-        # Procurar colunas que contenham as palavras-chave (case insensitive)
-        for col_name in table.columns:
-            col_lower = col_name.lower()
+        print(f"\nAnalisando tabela {i+1}...")
+        
+        # Identificar se é pré-live ou ao vivo verificando o conteúdo da coluna 'Time'
+        is_live = False
+        if 'Time' in table.columns:
+            # Verificar se há valores numéricos válidos na coluna Time (minutos do jogo)
+            time_values = table['Time'].dropna()
+            # Se há valores não nulos e pelo menos um é numérico, é ao vivo
+            is_live = len(time_values) > 0 and any(pd.to_numeric(val, errors='coerce') >= 0 for val in time_values)
+        
+        if not is_live:
+            print("  📋 Tabela PRÉ-LIVE detectada (coluna 'Time' vazia) - coletando odds iniciais...")
             
-            # Verificar se a coluna contém alguma das palavras-chave
-            if any(keyword in col_lower for keyword in target_columns):
-                print(f"Analisando coluna: {col_name}")
+            # Coletar odds iniciais das tabelas pré-live
+            odds_columns = ['1', 'X', '2', 'Home', 'Draw', 'Away', 'Over', 'Under']
+            table_odds = {}
+            
+            for odds_col in odds_columns:
+                if odds_col in table.columns:
+                    # Pegar o primeiro valor válido da coluna
+                    first_valid_value = None
+                    for value in table[odds_col]:
+                        if pd.notna(value) and str(value).strip() not in ['', '-']:
+                            first_valid_value = str(value).strip()
+                            break
+                    
+                    if first_valid_value:
+                        table_odds[odds_col] = first_valid_value
+            
+            if table_odds:
+                prelive_odds[f'tabela_{i+1}'] = table_odds
+                print(f"  ✅ Odds iniciais coletadas: {table_odds}")
+            else:
+                print("  ⚠️  Nenhuma odd inicial encontrada nesta tabela pré-live")
+            
+            continue
+        
+        # Tabela ao vivo - verificar se mercado está ativo
+        print("  🔴 Tabela AO VIVO detectada - verificando status do mercado...")
+        
+        market_active = False
+        odds_columns = ['1', 'Home', 'Over']
+        
+        for odds_col in odds_columns:
+            if odds_col in table.columns:
+                # Verificar se o primeiro valor não nulo não é um traço
+                first_valid_value = None
+                for value in table[odds_col]:
+                    if pd.notna(value) and str(value).strip() != '':
+                        first_valid_value = str(value).strip()
+                        break
+                        
+                if first_valid_value and first_valid_value != '-':
+                    market_active = True
+                    break
+                    
+        if not market_active:
+            print("  ❌ Mercado suspenso ignorado (odds não disponíveis)")
+            continue
+            
+        print("  ✅ Mercado ao vivo e ativo - analisando drops...")
+        
+        # Buscar por drops significativos apenas em tabelas ao vivo
+        drop_column = None
+        for col_name in table.columns:
+            if 'drop' in col_name.lower():
+                drop_column = col_name
+                break
                 
-                # Iterar sobre os valores da coluna
-                for value in table[col_name]:
-                    if pd.isna(value) or value == '' or value == '-':
-                        continue
-                        
-                    try:
-                        # Limpar o valor: remover % e converter para float
-                        clean_value = str(value).replace('%', '').replace(',', '.').strip()
-                        numeric_value = float(clean_value)
-                        
-                        # Ajustar threshold baseado no tipo de coluna
-                        if '%' in col_lower:
-                            # Para colunas de percentual, usar threshold direto
-                            effective_threshold = threshold
-                        else:
-                            # Para colunas Drop/Sharp, converter threshold para decimal
-                            # Ex: threshold 10.0 vira 0.10 (10%)
-                            effective_threshold = threshold / 100.0
-                        
-                        # Verificar se atende ao threshold (valor absoluto para drops negativos)
-                        if abs(numeric_value) >= effective_threshold:
-                            print(f"OPORTUNIDADE DETECTADA: {col_name} = {value} (|{numeric_value}| >= {effective_threshold})")
-                            return True, table
-                            
-                    except (ValueError, TypeError):
-                        # Ignorar valores que não podem ser convertidos
-                        continue
+        if not drop_column:
+            print(f"  ⚠️  Coluna 'Drop' não encontrada nesta tabela ao vivo")
+            continue
+            
+        print(f"  🔍 Analisando coluna: {drop_column}")
+        
+        # Analisar valores da coluna Drop
+        for value in table[drop_column]:
+            if pd.isna(value) or value == '' or value == '-':
+                continue
+                
+            try:
+                # Limpar o valor: remover % e converter para float
+                clean_value = str(value).replace('%', '').replace(',', '.').strip()
+                numeric_value = float(clean_value)
+                
+                # Converter threshold para decimal (ex: 10.0 -> 0.10)
+                effective_threshold = threshold / 100.0
+                
+                # Verificar se atende ao threshold (valor absoluto)
+                if abs(numeric_value) >= effective_threshold:
+                    print(f"\n🚨 !!! OPORTUNIDADE KAIROS ENCONTRADA !!! no Jogo ID: {match_id} 🚨")
+                    print(f"   Drop detectado: {value} (|{numeric_value}| >= {effective_threshold})")
+                    print(f"   Tabela: {drop_column} com {len(table)} linhas")
+                    return {
+                        'opportunity': table,
+                        'prelive_odds': prelive_odds
+                    }
+                    
+            except (ValueError, TypeError):
+                # Ignorar valores que não podem ser convertidos
+                continue
+                
+        print(f"  ✅ Tabela ao vivo analisada - nenhum drop >= {threshold}% encontrado")
     
-    return False, None
+    return {
+        'opportunity': None,
+        'prelive_odds': prelive_odds
+    }
 
 
 def scrape_all_available_tables(match_id):
@@ -287,20 +362,30 @@ if __name__ == "__main__":
         
         # Procurar por oportunidades significativas
         print(f"\n{'='*60}")
-        print("ANÁLISE DE OPORTUNIDADES")
+        print("ANÁLISE DE OPORTUNIDADES KAIROS")
         print(f"{'='*60}")
         
-        found_opportunity, opportunity_table = find_significant_drop(all_tables_list, threshold=10.0)
+        # Usar a nova função process_tables_for_opportunity
+        result = process_tables_for_opportunity(all_tables_list, first_match, threshold=10.0)
         
-        if found_opportunity:
-            print("\n🚨 OPORTUNIDADE ENCONTRADA! 🚨")
-            print("Tabela com drop significativo:")
-            print(f"Colunas: {list(opportunity_table.columns)}")
-            print(f"Dimensões: {opportunity_table.shape[0]} linhas x {opportunity_table.shape[1]} colunas")
-            print("\nPrimeiras linhas da tabela:")
-            print(opportunity_table.head())
+        # Exibir odds iniciais coletadas das tabelas pré-live
+        if result['prelive_odds']:
+            print("\n📋 === ODDS INICIAIS COLETADAS (PRÉ-LIVE) === 📋")
+            for table_name, odds in result['prelive_odds'].items():
+                print(f"  {table_name}: {odds}")
+        
+        # Verificar se foi encontrada uma oportunidade
+        if result['opportunity'] is not None:
+            print(f"\n{'='*60}")
+            print("RESUMO DA OPORTUNIDADE ENCONTRADA")
+            print(f"{'='*60}")
+            print(f"📊 Dimensões: {result['opportunity'].shape[0]} linhas x {result['opportunity'].shape[1]} colunas")
+            print(f"📋 Colunas: {list(result['opportunity'].columns)}")
+            print("\n📈 Primeiras linhas da tabela:")
+            print(result['opportunity'].head())
         else:
-            print("Nenhuma oportunidade significativa encontrada com o threshold atual.")
+            print("\n❌ Nenhuma oportunidade KAIROS encontrada com o threshold atual.")
+            print("   Todas as tabelas foram analisadas seguindo as regras de negócio.")
             
     else:
         print("Nenhuma partida ao vivo encontrada")
