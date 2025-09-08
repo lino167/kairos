@@ -66,8 +66,61 @@ O script irá:
 ### `get_live_match_ids()`
 Extrai os IDs dos jogos ao vivo da página principal do Dropping-Odds.
 
-### `scrape_event_page(match_id)`
+### `scrape_event_page(match_id, table_type=None)`
 Faz scraping de uma página específica de evento e retorna as tabelas de dados como DataFrames do pandas.
+
+**Parâmetros:**
+- `match_id` (str): ID do jogo para fazer scraping
+- `table_type` (str, opcional): Tipo de tabela para extrair. Opções:
+  - `None`: Página padrão do evento (dados de total/over-under)
+  - `'total'`: Odds de total de gols (Over/Under)
+  - `'handicap'`: Odds de handicap asiático
+  - `'total_ht'`: Odds de total de gols no primeiro tempo
+  - `'1x2_ht'`: Odds 1x2 do primeiro tempo
+  - `'1x2'`: Odds 1x2 (Casa/Empate/Visitante)
+
+**Exemplos de URLs geradas:**
+- `https://dropping-odds.com/event.php?id=10226978` (padrão - dados de total)
+- `https://dropping-odds.com/event.php?id=10226978&t=total`
+- `https://dropping-odds.com/event.php?id=10226978&t=handicap`
+- `https://dropping-odds.com/event.php?id=10226978&t=total_ht`
+- `https://dropping-odds.com/event.php?id=10226978&t=1x2_ht`
+
+## Exemplos de Uso
+
+### Uso Básico
+```python
+from scraper_do import get_live_match_ids, scrape_event_page
+
+# Obter IDs dos jogos ao vivo
+match_ids = get_live_match_ids()
+print(f"Jogos encontrados: {match_ids}")
+
+# Fazer scraping da página padrão do primeiro jogo
+if match_ids:
+    tables = scrape_event_page(match_ids[0])
+    print(f"Encontradas {len(tables)} tabelas")
+```
+
+### Scraping de Diferentes Tipos de Tabelas
+```python
+# Scraping de odds de total de gols
+total_tables = scrape_event_page(match_id, 'total')
+
+# Scraping de odds de handicap
+handicap_tables = scrape_event_page(match_id, 'handicap')
+
+# Scraping de odds do primeiro tempo
+ht_tables = scrape_event_page(match_id, 'total_ht')
+ht_1x2_tables = scrape_event_page(match_id, '1x2_ht')
+```
+
+### Exemplo Completo
+Veja o arquivo `example_usage.py` para um exemplo completo de como usar todas as funcionalidades.
+
+```bash
+python example_usage.py
+```
 
 ## Contribuição
 
