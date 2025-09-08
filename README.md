@@ -1,6 +1,6 @@
-# Kairos - Dropping Odds Scraper
+# Kairos Project - Web Scraper para Dropping-Odds
 
-Um script Python para fazer web scraping do site Dropping-Odds e extrair dados de odds de jogos ao vivo.
+Este projeto é um web scraper desenvolvido para coletar dados de odds em tempo real do site Dropping-Odds.com, com foco na identificação de oportunidades de apostas baseadas em quedas significativas de odds.
 
 ## Funcionalidades
 
@@ -8,6 +8,8 @@ Um script Python para fazer web scraping do site Dropping-Odds e extrair dados d
 - ✅ Scraping de dados detalhados de odds de jogos específicos
 - ✅ Uso do pandas para análise de dados estruturados
 - ✅ Tratamento robusto de erros
+- ✅ Análise de oportunidades baseada em drops de odds
+- ✅ Estrutura modular para facilitar manutenção e extensão
 
 ## Instalação
 
@@ -38,15 +40,54 @@ pip install -r requirements.txt
 
 ## Uso
 
-Execute o script principal:
+### Execução com a nova estrutura modular:
+
+1. Execute o módulo principal:
+```bash
+python main.py
+```
+
+### Execução com o script original (compatibilidade):
+
+1. Execute o script original:
 ```bash
 python scraper_do.py
 ```
 
-O script irá:
-1. Buscar todos os IDs de jogos ao vivo
-2. Fazer scraping da primeira página de evento encontrada
-3. Exibir as tabelas de dados extraídas
+### O que o sistema faz:
+
+- Busca jogos ao vivo no site Dropping-Odds
+- Extrai dados de odds para cada jogo encontrado
+- Diferencia tabelas pré-live (coleta odds iniciais) das ao vivo
+- Analisa drops significativos de odds (threshold configurável)
+- Identifica oportunidades KAIROS baseadas em quedas de odds
+- Exibe resultados detalhados no terminal
+
+## Arquitetura Modular
+
+### 📁 scraper/
+Módulo responsável pelo web scraping:
+- `web_scraper.py`: Funções para extrair dados do site Dropping-Odds
+  - `get_live_match_ids()`: Obtém IDs de jogos ao vivo
+  - `get_available_table_types()`: Detecta tipos de tabela disponíveis
+  - `scrape_event_page()`: Extrai tabelas de uma página específica
+  - `scrape_all_available_tables()`: Scraping completo de um evento
+
+### 📁 analyzer/
+Módulo responsável pela análise de oportunidades:
+- `opportunity_analyzer.py`: Lógica de análise de drops e oportunidades
+  - `process_tables_for_opportunity()`: Identifica oportunidades KAIROS
+  - Diferencia tabelas pré-live das ao vivo
+  - Analisa drops significativos baseados em threshold
+
+### 📁 utils/
+Módulo para utilitários gerais (expansível para futuras funcionalidades)
+
+### 📄 main.py
+Módulo principal que orquestra todo o sistema:
+- Coordena scraping e análise
+- Processa múltiplas partidas sequencialmente
+- Exibe resultados formatados
 
 ## Estrutura do Projeto
 
