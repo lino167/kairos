@@ -156,6 +156,64 @@ def main():
     """
     pass
 
+def find_significant_drop(tables, threshold=10.0):
+    """
+    Procura por drops significativos nas tabelas extraídas.
+    
+    Args:
+        tables (list): Lista de DataFrames
+        threshold (float): Limiar mínimo para considerar um drop significativo
+                          Para colunas Drop: valores absolutos (ex: 0.5 para 50%)
+                          Para colunas %: valores em percentual (ex: 10.0 para 10%)
+        
+    Returns:
+        tuple: (bool, DataFrame ou None) - True se encontrou oportunidade, False caso contrário
+    """
+    target_columns = ['drop', 'sharp', 'home%', 'away%', 'sharpness']
+    
+    for table in tables:
+        if table is None or table.empty:
+            continue
+            
+        # Procurar colunas que contenham as palavras-chave (case insensitive)
+        for col_name in table.columns:
+            col_lower = col_name.lower()
+            
+            # Verificar se a coluna contém alguma das palavras-chave
+            if any(keyword in col_lower for keyword in target_columns):
+                print(f"Analisando coluna: {col_name}")
+                
+                # Iterar sobre os valores da coluna
+                for value in table[col_name]:
+                    if pd.isna(value) or value == '' or value == '-':
+                        continue
+                        
+                    try:
+                        # Limpar o valor: remover % e converter para float
+                        clean_value = str(value).replace('%', '').replace(',', '.').strip()
+                        numeric_value = float(clean_value)
+                        
+                        # Ajustar threshold baseado no tipo de coluna
+                        if '%' in col_lower:
+                            # Para colunas de percentual, usar threshold direto
+                            effective_threshold = threshold
+                        else:
+                            # Para colunas Drop/Sharp, converter threshold para decimal
+                            # Ex: threshold 10.0 vira 0.10 (10%)
+                            effective_threshold = threshold / 100.0
+                        
+                        # Verificar se atende ao threshold (valor absoluto para drops negativos)
+                        if abs(numeric_value) >= effective_threshold:
+                            print(f"OPORTUNIDADE DETECTADA: {col_name} = {value} (|{numeric_value}| >= {effective_threshold})")
+                            return True, table
+                            
+                    except (ValueError, TypeError):
+                        # Ignorar valores que não podem ser convertidos
+                        continue
+    
+    return False, None
+
+
 def scrape_all_available_tables(match_id):
     """
     Faz scraping de todos os tipos de tabela disponíveis para um evento.
@@ -174,6 +232,7 @@ def scrape_all_available_tables(match_id):
     available_types = get_available_table_types(match_id)
     
     results = {}
+    all_tables = []  # Lista para armazenar todas as tabelas
     
     for table_type in available_types:
         print(f"\n{'='*40}")
@@ -187,6 +246,7 @@ def scrape_all_available_tables(match_id):
             main_table = tables[0] if tables else None
             if main_table is not None and not main_table.empty:
                 results[table_type] = main_table
+                all_tables.extend(tables)  # Adiciona todas as tabelas à lista
                 print(f"✓ Tabela {table_type}: {main_table.shape[0]} linhas x {main_table.shape[1]} colunas")
                 print(f"  Colunas: {list(main_table.columns)}")
                 print(f"  Amostra:")
@@ -201,28 +261,46 @@ def scrape_all_available_tables(match_id):
     print(f"Tipos extraídos: {list(results.keys())}")
     print(f"{'='*60}")
     
-    return results
+    return results, all_tables
 
 
 if __name__ == "__main__":
-    # Obter IDs de jogos ao vivo
-    match_ids = get_live_match_ids()
+    # Testar o scraper
+    live_matches = get_live_match_ids()
     
-    if match_ids:
-        print(f"Encontrados {len(match_ids)} jogos ao vivo")
+    if live_matches:
+        print(f"Encontradas {len(live_matches)} partidas ao vivo")
         
-        # Testar com o primeiro jogo encontrado
-        match_id = match_ids[0]
-        print(f"\nTestando com o jogo ID: {match_id}")
+        # Testar com a primeira partida
+        first_match = live_matches[0]
+        print(f"\nTestando com a partida: {first_match}")
         
-        # Fazer scraping completo de todas as tabelas disponíveis
-        all_tables = scrape_all_available_tables(match_id)
+        # Extrair todas as tabelas disponíveis
+        all_tables_dict, all_tables_list = scrape_all_available_tables(first_match)
         
-        # Resumo final
         print(f"\n{'='*60}")
         print("RESUMO FINAL")
         print(f"{'='*60}")
-        for table_type, table in all_tables.items():
-            print(f"{table_type.upper()}: {table.shape[0]} linhas x {table.shape[1]} colunas")
+        for table_type, table in all_tables_dict.items():
+            if table is not None:
+                print(f"{table_type}: {table.shape[0]} linhas x {table.shape[1]} colunas")
+        
+        # Procurar por oportunidades significativas
+        print(f"\n{'='*60}")
+        print("ANÁLISE DE OPORTUNIDADES")
+        print(f"{'='*60}")
+        
+        found_opportunity, opportunity_table = find_significant_drop(all_tables_list, threshold=10.0)
+        
+        if found_opportunity:
+            print("\n🚨 OPORTUNIDADE ENCONTRADA! 🚨")
+            print("Tabela com drop significativo:")
+            print(f"Colunas: {list(opportunity_table.columns)}")
+            print(f"Dimensões: {opportunity_table.shape[0]} linhas x {opportunity_table.shape[1]} colunas")
+            print("\nPrimeiras linhas da tabela:")
+            print(opportunity_table.head())
+        else:
+            print("Nenhuma oportunidade significativa encontrada com o threshold atual.")
+            
     else:
-        print("Nenhum jogo ao vivo encontrado")
+        print("Nenhuma partida ao vivo encontrada")
