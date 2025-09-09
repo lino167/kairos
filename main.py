@@ -7,6 +7,75 @@ from scraper.web_scraper import get_live_match_ids, scrape_all_available_tables
 # from scraper.flashscore_scraper import scrape_flashscore_live_games, find_matching_flashscore_games  # TODO: Implementar scraper do Flashscore
 from analyzer.opportunity_analyzer import process_tables_for_opportunity
 from scraper.match_info_extractor import get_live_matches_with_details
+from analyzer.ai_analyzer import configure_gemini, get_ai_analysis
+import pandas as pd
+
+def check_for_red_cards(tables_list: list) -> bool:
+    """
+    Verifica se há indicações de cartão vermelho nas tabelas de odds.
+    Procura por padrões que indicam cartão vermelho:
+    - Drops súbitos e significativos em múltiplas casas
+    - Suspensão temporária de mercados
+    - Mudanças drásticas em handicaps
+    
+    Args:
+        tables_list: Lista de DataFrames com as tabelas de odds
+        
+    Returns:
+        bool: True se há indicação de cartão vermelho, False caso contrário
+    """
+    red_card_indicators = 0
+    
+    for table in tables_list:
+        if table is None or table.empty:
+            continue
+            
+        # Procurar por coluna de drops
+        drop_column = None
+        for col_name in table.columns:
+            if 'drop' in col_name.lower():
+                drop_column = col_name
+                break
+                
+        if not drop_column:
+            continue
+            
+        # Contar drops significativos (indicativo de evento importante)
+        significant_drops = 0
+        for value in table[drop_column]:
+            if pd.isna(value) or value == '' or value == '-':
+                continue
+                
+            try:
+                clean_value = str(value).replace('%', '').replace(',', '.').strip()
+                numeric_value = float(clean_value)
+                
+                # Drops muito grandes podem indicar cartão vermelho
+                if abs(numeric_value) >= 0.80:  # 80% ou mais
+                    significant_drops += 1
+                    
+            except (ValueError, TypeError):
+                continue
+        
+        # Se há muitos drops significativos na mesma tabela
+        if significant_drops >= 3:
+            red_card_indicators += 1
+            
+        # Verificar se mercado está suspenso (odds com traços)
+        suspended_markets = 0
+        odds_columns = ['1', 'X', '2', 'Home', 'Draw', 'Away', 'Over', 'Under']
+        
+        for odds_col in odds_columns:
+            if odds_col in table.columns:
+                suspended_count = sum(1 for val in table[odds_col] if str(val).strip() == '-')
+                if suspended_count > len(table) * 0.5:  # Mais de 50% suspenso
+                    suspended_markets += 1
+                    
+        if suspended_markets >= 2:
+            red_card_indicators += 1
+    
+    # Se há múltiplos indicadores, provavelmente é cartão vermelho
+    return red_card_indicators >= 2
 
 # TODO: Reimplementar quando scrapers externos estiverem disponíveis
 # async def find_matching_external_games(dropping_odds_teams: list, external_games: list, source_name: str = "External") -> list:
@@ -38,6 +107,14 @@ async def run_kairos_cycle():
         from datetime import datetime
         print(f"\n🚀 INICIANDO CICLO KAIROS AVANÇADO - {datetime.now().strftime('%H:%M:%S')}")
         print(f"{'='*80}")
+        
+        # ETAPA 0: Configurar IA (apenas uma vez por ciclo)
+        try:
+            configure_gemini()
+            ai_available = True
+        except Exception as e:
+            print(f"⚠️ IA não disponível neste ciclo: {str(e)}")
+            ai_available = False
         
         # ETAPA 1: Buscar partidas ao vivo no Dropping-Odds
         print("📡 Buscando partidas ao vivo no Dropping-Odds...")
@@ -94,7 +171,44 @@ async def run_kairos_cycle():
                         print(f"   Placar atual: {match_detail.get('score', 'N/A')}")
                         print(f"   Tempo: {match_detail.get('match_time', 'N/A')}")
                         
-                        # ETAPA 4: Correspondência com fontes externas não será utilizada
+                        # ETAPA 4: Verificação de cartão vermelho e Análise de IA (se disponível)
+                        if ai_available:
+                            # Verificar se há indicação de cartão vermelho
+                            has_red_card = check_for_red_cards(all_tables_list)
+                            
+                            if has_red_card:
+                                print(f"\n[KAIROS] 🔴 CARTÃO VERMELHO DETECTADO!")
+                                print(f"   ⚠️ Análise de IA cancelada - evento de cartão vermelho identificado")
+                                print(f"   📊 Drops detectados são provavelmente devido ao cartão vermelho")
+                            else:
+                                print(f"\n[KAIROS] 🤖 Gerando análise de IA...")
+                                try:
+                                    # Preparar dados para a IA
+                                    match_details_for_ai = {
+                                        'teams': f"{home_team} vs {away_team}",
+                                        'time': match_detail.get('match_time', 'N/A'),
+                                        'score': match_detail.get('score', 'N/A')
+                                    }
+                                    
+                                    # Gerar análise com IA (incluindo informações do drop)
+                                    drop_info = result.get('drop_info', {})
+                                    ai_analysis = get_ai_analysis(
+                                        dropping_odds_tables=all_tables_list,
+                                        sofascore_stats={},  # Sem estatísticas externas por enquanto
+                                        match_details=match_details_for_ai,
+                                        drop_info=drop_info
+                                    )
+                                    
+                                    print(f"\n[KAIROS] 🎯 ANÁLISE DE IA:")
+                                    print(f"{'='*60}")
+                                    print(ai_analysis)
+                                    print(f"{'='*60}")
+                                    
+                                except Exception as e:
+                                    print(f"\n[KAIROS] ⚠️ Erro na análise de IA: {str(e)}")
+                        else:
+                            print(f"\n[KAIROS] ℹ️ Análise de IA não disponível neste ciclo")
+                        
                         print(f"\n[KAIROS] ℹ️ Sistema configurado para análise exclusiva do Dropping-Odds")
                         print(f"   Fontes externas (Bet365/Flashscore) não serão utilizadas nesta versão")
                     

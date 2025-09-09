@@ -11,13 +11,20 @@ def process_tables_for_opportunity(tables, match_id, threshold=10.0):
     Args:
         tables (list): Lista de DataFrames
         match_id (str): ID do match para identificação
-        threshold (float): Limiar mínimo para considerar um drop significativo (em %)
+        threshold (float): Limiar padrão (não usado mais - thresholds específicos por mercado)
         
     Returns:
         dict: {
             'opportunity': DataFrame ou None,
             'prelive_odds': dict com odds iniciais das tabelas pré-live
         }
+    
+    Thresholds específicos por mercado:
+    - 1X2: >= 0.50
+    - Total de Gols: >= 0.50
+    - Handicap (coluna sharpness): >= 0.30
+    - HT Total: >= 0.50
+    - HT 1X2: >= 0.40
     """
     
     prelive_odds = {}
@@ -111,24 +118,59 @@ def process_tables_for_opportunity(tables, match_id, threshold=10.0):
                 clean_value = str(value).replace('%', '').replace(',', '.').strip()
                 numeric_value = float(clean_value)
                 
-                # Converter threshold para decimal (ex: 10.0 -> 0.10)
-                effective_threshold = threshold / 100.0
+                # Determinar tipo de mercado e threshold específico ANTES da verificação
+                market_type = "Desconhecido"
+                market_threshold = 0.50  # Padrão
                 
-                # Verificar se atende ao threshold (valor absoluto)
-                if abs(numeric_value) >= effective_threshold:
+                if 'Home' in table.columns and 'Away' in table.columns:
+                    # Verificar se é HT (Half Time) ou FT (Full Time)
+                    if any('ht' in col.lower() for col in table.columns):
+                        market_type = "HT 1X2 (Primeiro Tempo)"
+                        market_threshold = 0.40
+                    else:
+                        market_type = "1X2 (Casa/Empate/Visitante)"
+                        market_threshold = 0.50
+                elif 'Over' in table.columns and 'Under' in table.columns:
+                    # Verificar se é HT Total ou FT Total
+                    if any('ht' in col.lower() for col in table.columns):
+                        market_type = "HT Total (Primeiro Tempo)"
+                        market_threshold = 0.50
+                    else:
+                        market_type = "Total de Gols (Over/Under)"
+                        market_threshold = 0.50
+                elif 'Handicap' in table.columns or 'sharpness' in drop_column.lower():
+                    market_type = "Handicap Asiático"
+                    market_threshold = 0.30
+                
+                # Verificar se atende ao threshold específico do mercado (valor absoluto)
+                if abs(numeric_value) >= market_threshold:
                     print(f"\n🚨 !!! OPORTUNIDADE KAIROS ENCONTRADA !!! no Jogo ID: {match_id} 🚨")
-                    print(f"   Drop detectado: {value} (|{numeric_value}| >= {effective_threshold})")
+                    print(f"   Drop detectado: {value} (|{numeric_value}| >= {market_threshold})")
+                    print(f"   Mercado: {market_type}")
                     print(f"   Tabela: {drop_column} com {len(table)} linhas")
+                    
+                    # Informações detalhadas do drop
+                    drop_info = {
+                        'drop_value': value,
+                        'numeric_value': numeric_value,
+                        'drop_column': drop_column,
+                        'market_type': market_type,
+                        'table_rows': len(table),
+                        'threshold': market_threshold,
+                        'detection_time': pd.Timestamp.now().strftime('%H:%M:%S')
+                    }
+                    
                     return {
                         'opportunity': table,
-                        'prelive_odds': prelive_odds
+                        'prelive_odds': prelive_odds,
+                        'drop_info': drop_info
                     }
                     
             except (ValueError, TypeError):
                 # Ignorar valores que não podem ser convertidos
                 continue
                 
-        print(f"  ✅ Tabela ao vivo analisada - nenhum drop >= {threshold}% encontrado")
+        print(f"  ✅ Tabela ao vivo analisada - nenhum drop significativo encontrado (thresholds específicos por mercado)")
     
     return {
         'opportunity': None,

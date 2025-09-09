@@ -4,3 +4,5 @@ pandas==2.3.2
 lxml==6.0.1
 playwright==1.55.0
 thefuzz==0.22.1
+google-generativeai==0.3.2
+python-dotenv==1.0.0
