@@ -25,23 +25,54 @@ class BaseAIProvider(ABC):
 
             timeline_str += f"  - {event['time']}' | {event['score']} | {event['market']} (Linha: {event.get('line', 'N/A')}){drop_detail} | {type_str}{meta_str}\n"
 
+        # --- NOVO: Contexto SofaScore Pre-Live ---
+        pre_str = ""
+        pre_data = snapshot.get("sofascore_prelive_data", {})
+        if pre_data:
+            pre_str = "CONTEXTO HISTÓRICO (SOFASCORE):\n"
+            pre_str += f"  • H2H (V-E-D): {pre_data.get('h2h', 'N/A')}\n"
+            pre_str += f"  • Forma Home: {pre_data.get('form', {}).get('home', 'N/A')} | Forma Away: {pre_data.get('form', {}).get('away', 'N/A')}\n"
+            if pre_data.get("streaks"):
+                pre_str += f"  • Tendências: {'; '.join(pre_data['streaks'][:3])}\n"
+
+        # --- NOVO: Contexto Bet365 Live ---
+        b365_str = ""
+        b365_data = snapshot.get("bet365_data", {})
+        if b365_data:
+            b365_str = "PRESSÃO AO VIVO (BET365):\n"
+            ap = b365_data.get("ataques_perigosos", {"home": "0", "away": "0"})
+            rem = b365_data.get("remates_alvo", {"home": "0", "away": "0"})
+            esc = b365_data.get("escanteios", {"home": "0", "away": "0"})
+            odds = b365_data.get("odds", {"home": "N/A", "draw": "N/A", "away": "N/A"})
+            markets = b365_data.get("markets_available", [])
+            
+            b365_str += f"  • Ataques Perigosos: {ap['home']} vs {ap['away']}\n"
+            b365_str += f"  • Chutes ao Gol: {rem['home']} vs {rem['away']}\n"
+            b365_str += f"  • Escanteios: {esc['home']} vs {esc['away']}\n"
+            b365_str += f"  • ODDS AO VIVO: Casa {odds['home']} | X {odds['draw']} | Fora {odds['away']}\n"
+            if markets:
+                b365_str += f"  • MERCADOS ABERTOS: {', '.join(markets[:10])}\n"
+            b365_str += f"  • LINK DIRETO: {b365_data.get('direct_link', 'Indisponível')}\n"
+
         return (
             f"Você é o KAIROS, um Punter Profissional de elite.\n"
-            f"Sua missão é explicar as anomalias de mercado com precisão numérica, agindo como se estivesse em um grupo VIP.\n\n"
+            f"Sua missão é explicar as anomalias de mercado cruzando o HISTÓRICO com a PRESSÃO ATUAL e as ODDS AO VIVO.\n\n"
             f"JOGO: {snapshot['match_name']}\n"
             f"PLACAR: {snapshot['live_score']}\n"
-            f"MOVIMENTAÇÕES RECENTES:\n{timeline_str or 'Sem eventos no momento.'}\n\n"
-            f"REGRAS DO JOGO (ANÁLISE NUMÉRICA):\n"
-            f"1. EXPLIQUE O DROP: No 'technical_insight', seja específico: 'A odd do [Time] derreteu de [X] para [Y]' ou 'A linha de gols subiu de [2.5] para [4.5]'.\n"
-            f"2. IDENTIFIQUE A CAUSA: O drop de odd ou subida de linha faz sentido com o placar e tempo? Se a linha subiu sem gol, é pressão total!\n"
-            f"3. VISÃO DE SHARK: Use os números para provar que tem valor. Se a odd caiu 0.30 pontos em 2 minutos, o mercado tá desesperado.\n"
-            f"4. DICA DE OURO: No campo 'betting_tip', dê uma entrada direta baseada nesses números.\n\n"
+            f"MOVIMENTAÇÕES RECENTES:\n{timeline_str or 'Sem eventos no momento.'}\n"
+            f"{pre_str}\n"
+            f"{b365_str or 'DADOS EM CAMPO: Estatísticas em tempo real não disponíveis no momento.'}\n\n"
+            f"REGRAS DO JOGO:\n"
+            f"1. VALIDAÇÃO HÍBRIDA: Use as estatísticas da Bet365 para ver se o time que 'deveria' ganhar (SofaScore) está realmente pressionando.\n"
+            f"2. ANÁLISE DE VALOR: Use as ODDS AO VIVO da Bet365. Se a odd caiu mas ainda está acima do que a pressão (Ataques Perigosos) justifica, é Green.\n"
+            f"3. VISÃO DE SHARK: Identifique 'trap houses' ou 'golden shots'.\n"
+            f"4. LINK DIRETO: Mencione que o link direto está disponível no alerta.\n\n"
             f"SAÍDA OBRIGATÓRIA EM JSON:\n"
             f"{{\n"
-            f"  \"category\": \"#GiriaDoMomento\",\n"
+            f"  \"category\": \"#KAIROS_HYBRID\",\n"
             f"  \"confidence\": \"1-10\",\n"
-            f"  \"technical_insight\": \"Sua análise aqui (ex: 'Odds derretendo após o vermelho, valor no AH -1').\",\n"
-            f"  \"betting_tip\": \"Entrada direta (ex: Over 0.5 HT @1.80)\",\n"
+            f"  \"technical_insight\": \"Sua análise cruzada (Contexto + Pressão + Odds).\",\n"
+            f"  \"betting_tip\": \"Entrada direta com a odd aproximada\",\n"
             f"  \"danger_level\": \"Baixo/Médio/Alt\"\n"
             f"}}"
         )
