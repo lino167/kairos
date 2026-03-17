@@ -38,14 +38,14 @@ class BaseAIProvider(ABC):
         liquidity = "OCÉANO (Alta Liquidez)" if strat.get("is_ocean") else "PISCINA (Baixa Liquidez)"
         divergence = "SIM (CONTRADIÇÃO)" if strat.get("is_divergence") else "NÃO (CONFIRMAÇÃO)"
         manipulation = ", ".join(strat.get("manipulation_labels", [])) or "Nenhum sinal claro"
-        
+
         strat_str = f"CONTEXTO ESTRATÉGICO:\n"
         strat_str += f"  • Liquidez: {liquidity}\n"
         strat_str += f"  • Divergência entre Fluxo e Campo: {divergence}\n"
         strat_str += f"  • SINAIS TÉCNICOS/MANIPULAÇÃO: {manipulation}\n"
 
         return (
-            f"Você é o KAIROS, um Analista Profissional de Movimentação Financeira Institucional (Smart Money).\n"
+            f"Você é o KAIROS, um Analista Profissional de Movimentação Financeira Institucional de futebol (Smart Money).\n"
             f"Sua missão é identificar se uma anomalia de mercado é 'Institutional Flow' (grandes sindicatos) ou 'Sharp Info' (informação privilegiada).\n\n"
             f"JOGO: {snapshot['match_name']}\n"
             f"PLACAR: {snapshot['live_score']}\n\n"
@@ -58,13 +58,13 @@ class BaseAIProvider(ABC):
             f"2. VISÃO DE MANIPULAÇÃO: Na PISCINA, busque por 'Informação Privilegiada' (drops sem motivo técnico).\n"
             f"3. DIVERGÊNCIA CROSS-MARKET: Se o preço do O/U e BTTS estiverem descorrelacionados, exponha o erro de precificação.\n"
             f"4. OVERREACTION FLUX: Identifique se o dinheiro institucional está 'corrigindo' um movimento exagerado do varejo após um gol ou cartão.\n\n"
-            f"SAÍDA OBRIGATÓRIA EM JSON:\n"
+            f"SAÍDA OBRIGATÓRIA EM JSON ESTRITO (Sem markdown extra):\n"
             f"{{\n"
             f"  \"category\": \"#KAIROS_INSTITUTIONAL\",\n"
             f"  \"confidence\": \"1-10\",\n"
-            f"  \"institutional_analysis\": \"Sua análise sobre o volume institucional vs campo.\",\n"
-            f"  \"betting_tip\": \"Entrada recomendada + mercado + odd sugerida\",\n"
-            f"  \"market_sentiment\": \"Otimista/Pessimista/Manipulado\"\n"
+            f"  \"reasoning\": \"Explicação curta e clara (max 500 caracteres) do porquê desta entrada.\",\n"
+            f"  \"betting_tip\": \"ENTRADA DIRETA (Ex: BACK OVER 2.5 / LAY HOME)\",\n"
+            f"  \"suggested_odd\": \"Odd mínima/ideal para entrar\"\n"
             f"}}"
         )
 

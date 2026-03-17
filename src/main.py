@@ -240,7 +240,7 @@ async def main():
                         print(f"      [!] GAILHO NÍVEL {level} DETECTADO. Manipulação: {manipulation_labels or 'Nenhuma'}")
 
                         # 6. Análise IA (Apenas Nível 3)
-                        ai_analysis = "Análise IA não solicitada para este nível."
+                        ai_data = {"betting_tip": "N/A", "reasoning": "Nível de prioridade insuficiente.", "suggested_odd": "N/A"}
                         if level == 3:
                             snapshot = {
                                 "match_name": teams,
@@ -256,31 +256,41 @@ async def main():
                                     "manipulation_labels": manipulation_labels
                                 }
                             }
-                            ai_analysis = await analyzer.analyze_cross_market(snapshot)
+                            ai_raw = await analyzer.analyze_cross_market(snapshot)
+                            try:
+                                # Tentar extrair JSON da resposta (limpando possíveis markdowns da IA)
+                                json_str = ai_raw.strip()
+                                if "```json" in json_str:
+                                    json_str = json_str.split("```json")[1].split("```")[0].strip()
+                                elif "```" in json_str:
+                                    json_str = json_str.split("```")[1].split("```")[0].strip()
+                                
+                                ai_data = json.loads(json_str)
+                            except:
+                                ai_data = {"betting_tip": "BACK/LAY (Ver Análise)", "reasoning": ai_raw[:200], "suggested_odd": "Live"}
+
+                        # 7. Alerta Telegram (Claro e Direto)
                         
-                        # 7. Alerta Telegram
-                        
-                        # Alerta Telegram (SokkerPro + Excapper)
-                        pressure_str = f"🔥 Pressão (5m/10m): `{sp_data['appm_5m']['home']}-{sp_data['appm_5m']['away']}` / `{sp_data['appm_10m']['home']}-{sp_data['appm_10m']['away']}`" if sp_data else "🔥 Pressão: `N/A`"
+                        # Definir cor/emoji por nível
+                        status_emoji = "🔴" if level == 3 else "🟡"
+                        manip_str = f"⚠️ *SINAL:* `{', '.join(manipulation_labels)}`" if manipulation_labels else ""
                         
                         msg = (
-                            f"🛰️ *KAIROS MONEY FLOW ALERT* 🛰️\n\n"
-                            f"⚽ *Partida:* {teams}\n"
-                            f"🔢 *Placar:* `{last_score}`\n"
-                            f"🏆 *Liga:* {match['league']}\n"
-                            f"💶 *Vol. Total:* `{match['total_money']}`\n\n"
-                            f"🚨 *MERCADO:* `{primary_anomaly['market']}`\n"
-                            f"📍 *SELEÇÃO:* `{primary_anomaly['selection']}`\n"
-                            f"📊 *ANOMALIA:* `{primary_anomaly['reason'].split('] ')[1]}`\n"
-                            f"📉 *BF ODD:* `{primary_anomaly['details']['odds']}`\n\n"
-                            f"📈 *SOKKERPRO LIVE:*\n"
-                            f"• {pressure_str}\n"
-                            f"• AP: `{sp_data['ataques_perigosos']['home'] if sp_data else '0'} - {sp_data['ataques_perigosos']['away'] if sp_data else '0'}`\n"
-                            f"• Posse: `{sp_data['posse']['home'] if sp_data else '50'}% - {sp_data['posse']['away'] if sp_data else '50'}%`\n\n"
-                            f"🚨 *SINAL DE MANIPULAÇÃO:* `{', '.join(manipulation_labels) if manipulation_labels else 'Negativo'}`\n"
-                            f"🤖 *IA INSIGHT:* {ai_analysis[:450]}...\n\n"
-                            f"🔗 [ABRIR NA BETFAIR]({primary_anomaly['bf_url']})\n"
-                            f"🔎 [Ver no Excapper]({match['url']})"
+                            f"{status_emoji} *KAIROS V2.4 - OPORTUNIDADE*\n"
+                            f"━━━━━━━━━━━━━━━━━━━━\n"
+                            f"⚽ *{teams}*\n"
+                            f"🔢 Placar: `{last_score}` | Vol: `{match['total_money']}`\n"
+                            f"━━━━━━━━━━━━━━━━━━━━\n"
+                            f"🎯 *INDICAÇÃO:* `{ai_data.get('betting_tip', 'N/A').upper()}`\n"
+                            f"💰 *ODD SUGERIDA:* `{ai_data.get('suggested_odd', 'N/A')}`\n"
+                            f"💡 *PORQUÊ:* {ai_data.get('reasoning', 'N/A')}\n"
+                            f"━━━━━━━━━━━━━━━━━━━━\n"
+                            f"📊 *DADOS DE CAMPO (SP):*\n"
+                            f"🔥 Pressão (5m): `{sp_data['appm_5m']['home'] if sp_data else 0}-{sp_data['appm_5m']['away'] if sp_data else 0}`\n"
+                            f"💣 AP: `{sp_data['ataques_perigosos']['home'] if sp_data else 0} - {sp_data['ataques_perigosos']['away'] if sp_data else 0}`\n"
+                            f"{manip_str}\n"
+                            f"━━━━━━━━━━━━━━━━━━━━\n"
+                            f"🔗 *[ABRIR NA BETFAIR]({primary_anomaly['bf_url']})*"
                         )
                         
                         send_telegram_alert(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, msg)
