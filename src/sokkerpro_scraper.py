@@ -9,7 +9,7 @@ class SokkerProScraper:
     async def search_match(self, page: Page, home: str, away: str) -> Dict:
         """Busca uma partida no SokkerPro e abre os detalhes."""
         try:
-            print(f"[*] [SOKKERPRO] Buscando: {home} vs {away}...")
+            print(f"[*] [SOKKERPRO] Buscando partida (Time: {home})...")
             if page.url == "about:blank" or not page.url.startswith(self.BASE_URL):
                 await page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=60000)
             
@@ -20,27 +20,33 @@ class SokkerProScraper:
             await page.keyboard.press("Backspace")
             
             await search_input.fill(home)
-            await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(4000) # Pausa maior para carregar dropdown
             
-            # Selecionar a terceira opção conforme solicitado
-            results = await page.query_selector_all(".fixture-item, .match-item, .match-card")
+            # Identificar a PARTIDA real nos resultados
+            # Procuramos por um item que contenha " vs " ou " - " no texto
+            results = await page.query_selector_all(".fixture-item, .match-item, .match-card, .search-result-item, .search-item")
             match_item = None
             
-            if len(results) >= 3:
-                print(f"    [*] Selecionando a terceira opção (de {len(results)} resultados)...")
-                match_item = results[2]
-            elif len(results) > 0:
-                print(f"    [*] Menos de 3 resultados encontrados ({len(results)}). Selecionando o primeiro...")
-                match_item = results[0]
-            else:
-                # Fallback para busca por texto se os seletores de classe falharem
-                match_item = await page.query_selector(f"text='{home}'")
-                if not match_item:
-                    match_item = await page.query_selector(f"text='{away}'")
+            print(f"    [*] Analisando {len(results)} resultados de busca...")
+            for item in results:
+                text = await item.inner_text()
+                if " vs " in text or " - " in text:
+                    print(f"    [+] Partida identificada pelo texto: '{text.replace('\n', ' ')}'")
+                    match_item = item
+                    break
+            
+            # Fallback caso a detecção por texto falhe (pode ser um jogo muito recente/específico)
+            if not match_item:
+                if len(results) >= 3:
+                    print(f"    [*] Texto 'vs' não achado. Usando fallback: 3ª opção.")
+                    match_item = results[2]
+                elif len(results) > 0:
+                    print(f"    [*] Texto 'vs' não achado. Usando fallback: 1º resultado.")
+                    match_item = results[0]
 
             if match_item:
                 await match_item.click()
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(3000)
                 print(f"    [+] Partida selecionada.")
                 return {"found": True}
             
@@ -56,14 +62,14 @@ class SokkerProScraper:
             panel = await page.wait_for_selector(".desktop-details-panel", timeout=8000)
             if not panel: return None
 
-            # Garantir aba correta (pode ser 'AO VIVO' ou 'ESTATÍSTICAS')
-            live_tab = await panel.query_selector("button.tab-button:has-text('AO VIVO')")
+            # Garantir aba correta: ESTATÍSTICAS (prioridade para live) ou AO VIVO
+            live_tab = await panel.query_selector("button.tab-button:has-text('ESTATÍSTICAS')")
             if not live_tab:
-                live_tab = await panel.query_selector("button.tab-button:has-text('ESTATÍSTICAS')")
+                live_tab = await panel.query_selector("button.tab-button:has-text('AO VIVO')")
             
             if live_tab and "active" not in await live_tab.get_attribute("class"):
                 await live_tab.click()
-                await page.wait_for_timeout(1500)
+                await page.wait_for_timeout(2000)
 
             stats = {
                 "ataques": {"home": 0, "away": 0},
@@ -110,6 +116,18 @@ class SokkerProScraper:
             h, a = await find_values_by_label("APPM 10m")
             if not h: h, a = await find_values_by_label("APPM 10 MIN")
             if h: stats["appm_10m"] = {"home": float(h), "away": float(a)}
+
+            # Extrair Minuto (Geralmente no header ou placa)
+            minute_el = await panel.query_selector(".match-minute, .time-clock")
+            if minute_el:
+                min_text = await minute_el.inner_text()
+                match_min = re.search(r"(\d+)", min_text)
+                if match_min:
+                    stats["minute"] = int(match_min.group(1))
+                else:
+                    stats["minute"] = 0
+            else:
+                stats["minute"] = 0
 
             return stats
         except Exception as e:

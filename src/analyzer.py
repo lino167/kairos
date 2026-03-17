@@ -9,31 +9,44 @@ class BaseAIProvider(ABC):
         pass
 
     def _prepare_prompt(self, snapshot: dict) -> str:
-        # --- Contexto Excapper (Money Flow) ---
+        # --- Contexto do Jogo ---
+        is_live = snapshot.get("is_live", False)
+        status = "LIVE 🔴" if is_live else "PRE-LIVE 🔵"
+        
+        # --- Contexto Excapper (Cross-Market Flow) ---
         primary = snapshot.get("primary_anomaly", {})
-        flow_str = f"DETALHE DO FLUXO:\n  • Mercado: {primary.get('market')} | Seleção: {primary.get('selection')}\n"
+        all_anomalies = snapshot.get("all_anomalies", [])
+        
+        flow_str = f"DETALHE DO FLUXO PRINCIPAL:\n  • Mercado: {primary.get('market')} | Seleção: {primary.get('selection')}\n"
         flow_str += f"  • Anomalia: {primary.get('reason')}\n"
-        flow_str += f"  • Link Betfair: {primary.get('bf_url')}\n"
+        
+        if len(all_anomalies) > 1:
+            flow_str += "CROSS-MARKET (Outras anomalias no mesmo jogo):\n"
+            for anom in all_anomalies:
+                if anom['short_id'] != primary['short_id']:
+                    flow_str += f"  • {anom['market']} ({anom['selection']}): {anom['reason']}\n"
 
         # --- Contexto SokkerPro (Live Stats) ---
         sp_live = snapshot.get("sokkerpro_live", {})
         sp_str = "DADOS DE CAMPO (SOKKERPRO LIVE):\n"
-        if sp_live:
+        if is_live and sp_live:
             sp_str += f"  • Pressão 5m: {sp_live['appm_5m']['home']} (Casa) vs {sp_live['appm_5m']['away']} (Fora)\n"
             sp_str += f"  • Pressão 10m: {sp_live['appm_10m']['home']} (Casa) vs {sp_live['appm_10m']['away']} (Fora)\n"
             sp_str += f"  • AP (Ataques Perigosos): {sp_live['ataques_perigosos']['home']} vs {sp_live['ataques_perigosos']['away']}\n"
             sp_str += f"  • Posse: {sp_live['posse']['home']}% vs {sp_live['posse']['away']}%\n"
+        elif is_live:
+            sp_str += "  • Dados de tempo real indisponíveis no momento.\n"
         else:
-            sp_str += "  • Dados de tempo real indisponíveis.\n"
+            sp_str += "  • [JOGO PRÉ-LIVE] Estátisticas de campo não aplicáveis ainda.\n"
 
-        # --- Contexto SokkerPro (Pre-Live) ---
+        # --- Contexto SokkerPro (Pre-Live/Histórico) ---
         sp_pre = snapshot.get("sokkerpro_pre", {})
-        pre_str = "MÉDIAS PRÉ-JOGO:\n"
+        pre_str = "MÉDIAS HISTÓRICAS (PRE-LIVE):\n"
         if sp_pre:
-            pre_str += f"  • Gols: {sp_pre.get('avg_goals', 'N/A')}\n"
-            pre_str += f"  • Cantos: {sp_pre.get('avg_corners', 'N/A')}\n"
+            pre_str += f"  • Média Geral Gols: {sp_pre.get('avg_goals', 'N/A')}\n"
+            pre_str += f"  • Média Cantos (H2H): {sp_pre.get('avg_corners', 'N/A')}\n"
 
-        # --- Contexto Estratégico (Oceano vs Divergência) ---
+        # --- Contexto Estratégico ---
         strat = snapshot.get("strategic_context", {})
         liquidity = "OCÉANO (Alta Liquidez)" if strat.get("is_ocean") else "PISCINA (Baixa Liquidez)"
         divergence = "SIM (CONTRADIÇÃO)" if strat.get("is_divergence") else "NÃO (CONFIRMAÇÃO)"
@@ -41,30 +54,31 @@ class BaseAIProvider(ABC):
 
         strat_str = f"CONTEXTO ESTRATÉGICO:\n"
         strat_str += f"  • Liquidez: {liquidity}\n"
-        strat_str += f"  • Divergência entre Fluxo e Campo: {divergence}\n"
-        strat_str += f"  • SINAIS TÉCNICOS/MANIPULAÇÃO: {manipulation}\n"
+        strat_str += f"  • Divergência Fluxo vs Campo: {divergence}\n"
+        strat_str += f"  • SINAIS TÉCNICOS: {manipulation}\n"
 
         return (
-            f"Você é o KAIROS, um Analista Profissional de Movimentação Financeira Institucional de futebol (Smart Money).\n"
-            f"Sua missão é identificar se uma anomalia de mercado é 'Institutional Flow' (grandes sindicatos) ou 'Sharp Info' (informação privilegiada).\n\n"
+            f"Você é o KAIROS, um Analista Expert em 'Smart Money' e Fluxo Institucional da Betfair.\n"
+            f"Sua missão é validar se a anomalia financeira detectada é um movimento real de 'Dinheiro Inteligente' ou apenas ruído de mercado.\n\n"
             f"JOGO: {snapshot['match_name']}\n"
-            f"PLACAR: {snapshot['live_score']}\n\n"
+            f"STATUS: {status}\n"
+            f"PLACAR ATUAL: {snapshot['live_score']}\n\n"
             f"{strat_str}\n"
             f"{flow_str}\n"
             f"{sp_str}\n"
-            f"{pre_str}\n\n"
-            f"REGRAS DE ANÁLISE PROFISSIONAL:\n"
-            f"1. VISÃO INSTITUCIONAL: No OCÉANO, movimentos de 5-8% com volumes >€50k são orquestrados por sindicatos. Valide se a estatística apóia ou se o mercado antecipa algo.\n"
-            f"2. VISÃO DE MANIPULAÇÃO: Na PISCINA, busque por 'Informação Privilegiada' (drops sem motivo técnico).\n"
-            f"3. DIVERGÊNCIA CROSS-MARKET: Se o preço do O/U e BTTS estiverem descorrelacionados, exponha o erro de precificação.\n"
-            f"4. OVERREACTION FLUX: Identifique se o dinheiro institucional está 'corrigindo' um movimento exagerado do varejo após um gol ou cartão.\n\n"
-            f"SAÍDA OBRIGATÓRIA EM JSON ESTRITO (Sem markdown extra):\n"
+            f"{pre_str}\n"
+            f"MISSÃO DE ANÁLISE:\n"
+            f"1. ANALISE A CORRELAÇÃO: O volume no mercado principal faz sentido com as outras anomalias (anomalias cruzadas)?\n"
+            f"2. LIVE VS DATA: Se LIVE, a pressão (APPM) justifica a queda da odd? Se PRE-LIVE, o 'drop' é puramente financeiro/info privilegiada?\n"
+            f"3. VEREDITO: Identifique 'Institutional Flow' (sindicatos no Oceano) ou 'Sharp Action' (insiders na Piscina).\n\n"
+            f"SAÍDA OBRIGATÓRIA EM JSON ESTRITO:\n"
             f"{{\n"
-            f"  \"category\": \"#KAIROS_INSTITUTIONAL\",\n"
+            f"  \"category\": \"#KAIROS_ANALYSIS\",\n"
+            f"  \"risk\": \"Baixo/Médio/Alto\",\n"
             f"  \"confidence\": \"1-10\",\n"
-            f"  \"reasoning\": \"Explicação curta e clara (max 500 caracteres) do porquê desta entrada.\",\n"
-            f"  \"betting_tip\": \"ENTRADA DIRETA (Ex: BACK OVER 2.5 / LAY HOME)\",\n"
-            f"  \"suggested_odd\": \"Odd mínima/ideal para entrar\"\n"
+            f"  \"reasoning\": \"Raciocínio profissional e técnico (Max 600 caracteres). Comece direto no ponto, focando no 'Ajuste Brutal' ou anomalia detectada.\",\n"
+            f"  \"betting_tip\": \"AÇÃO (Ex: Kastamonuspor AH +0.5 / BACK OVER 1.5)\",\n"
+            f"  \"suggested_odd\": \"Odd mínima ou cenário (Ex: @ Live / @ 1.80)\"\n"
             f"}}"
         )
 

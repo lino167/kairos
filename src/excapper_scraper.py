@@ -36,10 +36,9 @@ class ExcapperScraper:
                 cols = await row.query_selector_all("td")
                 if len(cols) < 5: continue
 
-                # Filtro de Live: Se a primeira coluna contém uma data completa (DD.MM.YYYY), não é live
+                # Identificar se é LIVE ou PRÉ-JOGO
                 time_text = (await cols[0].inner_text()).strip()
-                if re.search(r"\d{2}\.\d{2}\.\d{4}", time_text):
-                    continue
+                is_live = not bool(re.search(r"\d{2}\.\d{2}\.\d{4}", time_text))
 
                 # Identificar game_id nos novos atributos observados
                 game_id = await row.get_attribute("game_id")
@@ -56,12 +55,15 @@ class ExcapperScraper:
                 match_data = {
                     "game_id": game_id,
                     "teams": teams_text,
+                    "is_live": is_live,
+                    "time_text": time_text,
                     "total_money": (await cols[4].inner_text()).strip(),
                     "league": (await cols[2].inner_text()).strip(),
                     "url": f"{self.BASE_URL}?action=game&id={game_id}"
                 }
                 matches.append(match_data)
-                print(f"    [+] Jogo encontrado: {teams_text} (ID: {game_id})")
+                status = "LIVE" if is_live else "PRÉ"
+                print(f"    [+] Jogo encontrado [{status}]: {teams_text} (ID: {game_id})")
             
             return matches
         except Exception as e:
