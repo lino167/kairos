@@ -1,7 +1,6 @@
 import google.generativeai as genai
 import asyncio
 import json
-import os
 from abc import ABC, abstractmethod
 
 class BaseAIProvider(ABC):
@@ -10,70 +9,62 @@ class BaseAIProvider(ABC):
         pass
 
     def _prepare_prompt(self, snapshot: dict) -> str:
-        timeline_str = ""
-        for event in snapshot.get("unified_timeline", [])[:15]: # Top 15 eventos para contexto
-            type_str = f"DROP" if event['type'] == "DROP" else "SUSPENSÃO"
-            meta = []
-            if event.get("penalty"): meta.append("PENALTY")
-            if event.get("red_card"): meta.append("RED CARD")
-            meta_str = f" [{', '.join(meta)}]" if meta else ""
-            
-            # Detalhes numéricos do drop
-            drop_detail = ""
-            if event['type'] == "DROP":
-                drop_detail = f" | {event['selection'].upper()}: {event['prev_value']} -> {event['curr_value']}"
+        # --- Contexto Excapper (Money Flow) ---
+        primary = snapshot.get("primary_anomaly", {})
+        flow_str = f"DETALHE DO FLUXO:\n  • Mercado: {primary.get('market')} | Seleção: {primary.get('selection')}\n"
+        flow_str += f"  • Anomalia: {primary.get('reason')}\n"
+        flow_str += f"  • Link Betfair: {primary.get('bf_url')}\n"
 
-            timeline_str += f"  - {event['time']}' | {event['score']} | {event['market']} (Linha: {event.get('line', 'N/A')}){drop_detail} | {type_str}{meta_str}\n"
+        # --- Contexto SokkerPro (Live Stats) ---
+        sp_live = snapshot.get("sokkerpro_live", {})
+        sp_str = "DADOS DE CAMPO (SOKKERPRO LIVE):\n"
+        if sp_live:
+            sp_str += f"  • Pressão 5m: {sp_live['appm_5m']['home']} (Casa) vs {sp_live['appm_5m']['away']} (Fora)\n"
+            sp_str += f"  • Pressão 10m: {sp_live['appm_10m']['home']} (Casa) vs {sp_live['appm_10m']['away']} (Fora)\n"
+            sp_str += f"  • AP (Ataques Perigosos): {sp_live['ataques_perigosos']['home']} vs {sp_live['ataques_perigosos']['away']}\n"
+            sp_str += f"  • Posse: {sp_live['posse']['home']}% vs {sp_live['posse']['away']}%\n"
+        else:
+            sp_str += "  • Dados de tempo real indisponíveis.\n"
 
-        # --- NOVO: Contexto SofaScore Pre-Live ---
-        pre_str = ""
-        pre_data = snapshot.get("sofascore_prelive_data", {})
-        if pre_data:
-            pre_str = "CONTEXTO HISTÓRICO (SOFASCORE):\n"
-            pre_str += f"  • H2H (V-E-D): {pre_data.get('h2h', 'N/A')}\n"
-            pre_str += f"  • Forma Home: {pre_data.get('form', {}).get('home', 'N/A')} | Forma Away: {pre_data.get('form', {}).get('away', 'N/A')}\n"
-            if pre_data.get("streaks"):
-                pre_str += f"  • Tendências: {'; '.join(pre_data['streaks'][:3])}\n"
+        # --- Contexto SokkerPro (Pre-Live) ---
+        sp_pre = snapshot.get("sokkerpro_pre", {})
+        pre_str = "MÉDIAS PRÉ-JOGO:\n"
+        if sp_pre:
+            pre_str += f"  • Gols: {sp_pre.get('avg_goals', 'N/A')}\n"
+            pre_str += f"  • Cantos: {sp_pre.get('avg_corners', 'N/A')}\n"
 
-        # --- NOVO: Contexto Bet365 Live ---
-        b365_str = ""
-        b365_data = snapshot.get("bet365_data", {})
-        if b365_data:
-            b365_str = "PRESSÃO AO VIVO (BET365):\n"
-            ap = b365_data.get("ataques_perigosos", {"home": "0", "away": "0"})
-            rem = b365_data.get("remates_alvo", {"home": "0", "away": "0"})
-            esc = b365_data.get("escanteios", {"home": "0", "away": "0"})
-            odds = b365_data.get("odds", {"home": "N/A", "draw": "N/A", "away": "N/A"})
-            markets = b365_data.get("markets_available", [])
-            
-            b365_str += f"  • Ataques Perigosos: {ap['home']} vs {ap['away']}\n"
-            b365_str += f"  • Chutes ao Gol: {rem['home']} vs {rem['away']}\n"
-            b365_str += f"  • Escanteios: {esc['home']} vs {esc['away']}\n"
-            b365_str += f"  • ODDS AO VIVO: Casa {odds['home']} | X {odds['draw']} | Fora {odds['away']}\n"
-            if markets:
-                b365_str += f"  • MERCADOS ABERTOS: {', '.join(markets[:10])}\n"
-            b365_str += f"  • LINK DIRETO: {b365_data.get('direct_link', 'Indisponível')}\n"
+        # --- Contexto Estratégico (Oceano vs Divergência) ---
+        strat = snapshot.get("strategic_context", {})
+        liquidity = "OCÉANO (Alta Liquidez)" if strat.get("is_ocean") else "PISCINA (Baixa Liquidez)"
+        divergence = "SIM (CONTRADIÇÃO)" if strat.get("is_divergence") else "NÃO (CONFIRMAÇÃO)"
+        manipulation = ", ".join(strat.get("manipulation_labels", [])) or "Nenhum sinal claro"
+        
+        strat_str = f"CONTEXTO ESTRATÉGICO:\n"
+        strat_str += f"  • Liquidez: {liquidity}\n"
+        strat_str += f"  • Divergência entre Fluxo e Campo: {divergence}\n"
+        strat_str += f"  • SINAIS TÉCNICOS/MANIPULAÇÃO: {manipulation}\n"
 
         return (
-            f"Você é o KAIROS, um Punter Profissional de elite.\n"
-            f"Sua missão é explicar as anomalias de mercado cruzando o HISTÓRICO com a PRESSÃO ATUAL e as ODDS AO VIVO.\n\n"
+            f"Você é o KAIROS, um Analista Profissional de Movimentação Financeira Institucional (Smart Money).\n"
+            f"Sua missão é identificar se uma anomalia de mercado é 'Institutional Flow' (grandes sindicatos) ou 'Sharp Info' (informação privilegiada).\n\n"
             f"JOGO: {snapshot['match_name']}\n"
-            f"PLACAR: {snapshot['live_score']}\n"
-            f"MOVIMENTAÇÕES RECENTES:\n{timeline_str or 'Sem eventos no momento.'}\n"
-            f"{pre_str}\n"
-            f"{b365_str or 'DADOS EM CAMPO: Estatísticas em tempo real não disponíveis no momento.'}\n\n"
-            f"REGRAS DO JOGO:\n"
-            f"1. VALIDAÇÃO HÍBRIDA: Use as estatísticas da Bet365 para ver se o time que 'deveria' ganhar (SofaScore) está realmente pressionando.\n"
-            f"2. ANÁLISE DE VALOR: Use as ODDS AO VIVO da Bet365. Se a odd caiu mas ainda está acima do que a pressão (Ataques Perigosos) justifica, é Green.\n"
-            f"3. VISÃO DE SHARK: Identifique 'trap houses' ou 'golden shots'.\n"
-            f"4. LINK DIRETO: Mencione que o link direto está disponível no alerta.\n\n"
+            f"PLACAR: {snapshot['live_score']}\n\n"
+            f"{strat_str}\n"
+            f"{flow_str}\n"
+            f"{sp_str}\n"
+            f"{pre_str}\n\n"
+            f"REGRAS DE ANÁLISE PROFISSIONAL:\n"
+            f"1. VISÃO INSTITUCIONAL: No OCÉANO, movimentos de 5-8% com volumes >€50k são orquestrados por sindicatos. Valide se a estatística apóia ou se o mercado antecipa algo.\n"
+            f"2. VISÃO DE MANIPULAÇÃO: Na PISCINA, busque por 'Informação Privilegiada' (drops sem motivo técnico).\n"
+            f"3. DIVERGÊNCIA CROSS-MARKET: Se o preço do O/U e BTTS estiverem descorrelacionados, exponha o erro de precificação.\n"
+            f"4. OVERREACTION FLUX: Identifique se o dinheiro institucional está 'corrigindo' um movimento exagerado do varejo após um gol ou cartão.\n\n"
             f"SAÍDA OBRIGATÓRIA EM JSON:\n"
             f"{{\n"
-            f"  \"category\": \"#KAIROS_HYBRID\",\n"
+            f"  \"category\": \"#KAIROS_INSTITUTIONAL\",\n"
             f"  \"confidence\": \"1-10\",\n"
-            f"  \"technical_insight\": \"Sua análise cruzada (Contexto + Pressão + Odds).\",\n"
-            f"  \"betting_tip\": \"Entrada direta com a odd aproximada\",\n"
-            f"  \"danger_level\": \"Baixo/Médio/Alt\"\n"
+            f"  \"institutional_analysis\": \"Sua análise sobre o volume institucional vs campo.\",\n"
+            f"  \"betting_tip\": \"Entrada recomendada + mercado + odd sugerida\",\n"
+            f"  \"market_sentiment\": \"Otimista/Pessimista/Manipulado\"\n"
             f"}}"
         )
 
