@@ -19,19 +19,24 @@ class SokkerProScraper:
             await page.keyboard.press("Control+A")
             await page.keyboard.press("Backspace")
             
-            await search_input.fill(f"{home} {away}")
+            await search_input.fill(home)
             await page.wait_for_timeout(3000)
             
-            # Tentar selecionar o jogo - SokkerPro usa classes como .fixture-item ou .match-item
-            # Vamos usar uma busca por texto nos elementos que parecem jogos
-            # O seletor '.fixture-item' ou '.match-item' costuma conter os nomes.
-            match_item = await page.query_selector(f"text='{home}'")
-            if not match_item:
-                match_item = await page.query_selector(f"text='{away}'")
+            # Selecionar a terceira opção conforme solicitado
+            results = await page.query_selector_all(".fixture-item, .match-item, .match-card")
+            match_item = None
             
-            # Se não achar pelo texto direto, tenta o seletor de classe aproximada
-            if not match_item:
-                match_item = await page.query_selector(".fixture-item, .match-item, .match-card")
+            if len(results) >= 3:
+                print(f"    [*] Selecionando a terceira opção (de {len(results)} resultados)...")
+                match_item = results[2]
+            elif len(results) > 0:
+                print(f"    [*] Menos de 3 resultados encontrados ({len(results)}). Selecionando o primeiro...")
+                match_item = results[0]
+            else:
+                # Fallback para busca por texto se os seletores de classe falharem
+                match_item = await page.query_selector(f"text='{home}'")
+                if not match_item:
+                    match_item = await page.query_selector(f"text='{away}'")
 
             if match_item:
                 await match_item.click()
