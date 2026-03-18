@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import time
 import hashlib
@@ -357,84 +358,180 @@ async def main():
 
                         print(f"      [!] GAILHO NÍVEL {level} DETECTADO. Manipulação: {manipulation_labels or 'Nenhuma'}")
 
-                        # 6. Análise IA (Apenas Nível 3 e se houver dados do SokkerPro)
-                        ai_data = {"betting_tip": "N/A", "reasoning": "Nível de prioridade insuficiente ou falta de dados SP.", "suggested_odd": "N/A"}
-                        if level == 3 and sp_data:
-                            snapshot = {
+                        # 6. Análise IA (Nível 3 sempre; enriquece com SokkerPro se disponível)
+                        ai_data = {
+                            "verdict": "NOISE",
+                            "betting_tip": "N/A",
+                            "reasoning": "Análise automática indisponível.",
+                            "suggested_odd": "N/A",
+                            "risk": "Médio",
+                            "confidence": 5,
+                            "stake_suggestion": "Mínimo",
+                            "alert_headline": "Anomalia detectada",
+                        }
+
+                        if level == 3:
+                            ai_snapshot = {
                                 "match_name": teams,
                                 "live_score": last_score,
-                                "is_live": match["is_live"], # Informar à IA se é LIVE ou PRÉ
+                                "is_live": match["is_live"],
+                                "current_minute": current_min,
                                 "primary_anomaly": primary_anomaly,
-                                "all_anomalies": found_anomalies, # Cross-Market data
-                                "sokkerpro_live": sp_data,
-                                "sokkerpro_pre": pre_stats,
+                                "all_anomalies": found_anomalies,
+                                "sokkerpro_live": sp_data,       # pode ser None
+                                "sokkerpro_pre": pre_stats,       # pode ser None
+                                "smart_money_result": sm_result,  # ← NOVO: contexto SM
                                 "strategic_context": {
                                     "is_ocean": is_ocean,
                                     "avg_appm": avg_appm,
                                     "is_divergence": avg_appm <= PRESSURE_DIVERGENCE,
-                                    "manipulation_labels": manipulation_labels
-                                }
+                                    "manipulation_labels": manipulation_labels,
+                                },
                             }
-                            ai_raw = await analyzer.analyze_cross_market(snapshot)
+                            ai_raw = await analyzer.analyze_cross_market(ai_snapshot)
                             try:
-                                # Extração robusta de JSON procurando pelos delimitadores { e }
+                                # Extração robusta de JSON
                                 start = ai_raw.find('{')
-                                end = ai_raw.rfind('}') + 1
-                                if start != -1 and end != 0:
-                                    json_str = ai_raw[start:end]
-                                    ai_data = json.loads(json_str)
+                                end   = ai_raw.rfind('}') + 1
+                                if start != -1 and end > 0:
+                                    ai_data = json.loads(ai_raw[start:end])
                                 else:
-                                    raise ValueError("Delimitadores JSON não encontrados")
+                                    raise ValueError("JSON não encontrado na resposta")
                             except Exception as e:
                                 print(f"      [!] Falha ao processar JSON da IA: {e}")
-                                # Fallback: se falhar o JSON, limpa a string e tenta exibir o máximo possível
-                                cleaned_raw = ai_raw.replace("```json", "").replace("```", "").strip()
+                                cleaned = ai_raw.replace("```json", "").replace("```", "").strip()
                                 ai_data = {
+                                    "verdict": "SUSPICIOUS",
                                     "betting_tip": "BACK/LAY (Ver Detalhes)",
-                                    "reasoning": (cleaned_raw[:450] + "...") if len(cleaned_raw) > 450 else cleaned_raw,
+                                    "reasoning": (cleaned[:480] + "…") if len(cleaned) > 480 else cleaned,
                                     "suggested_odd": "Live",
                                     "risk": "Médio",
-                                    "confidence": "7"
+                                    "confidence": 6,
+                                    "stake_suggestion": "Mínimo",
+                                    "alert_headline": "Anomalia detectada — análise manual recomendada",
                                 }
 
-                        # 7. Alerta Telegram (Deep Intelligence Edition)
-                        league = match.get("league", "Futebol")
-                        excapper_url = match.get("url", "https://www.excapper.com")
-                        time_info = match["time_text"]
+                        # ── 7. Formatação do Alerta Telegram ──────────────────────────────
+                        league        = match.get("league", "Futebol")
+                        excapper_url  = match.get("url", "https://www.excapper.com")
+                        time_info     = match["time_text"]
 
-                        # Estrelas de confiança
+                        # Confiança e estrelas
                         try:
-                            conf_val = int(ai_data.get("confidence", 7))
-                        except:
-                            conf_val = 7
-                        stars = "⭐" * (conf_val // 2 if conf_val > 1 else 1)
+                            conf_val = int(ai_data.get("confidence", 5))
+                        except (ValueError, TypeError):
+                            conf_val = 5
+                        conf_val  = max(1, min(10, conf_val))
+                        stars     = "⭐" * (conf_val // 2 if conf_val > 1 else 1)
 
-                        # Contexto de liquidez da liga para o alerta
-                        sm_profile = sm_result["league_profile"]
-                        sm_tier_icon = sm_result["tier_icon"]
-                        sm_tier_label = sm_profile["tier"]
-                        sm_spark_threshold = sm_profile["spark_threshold"]
+                        # Contexto Smart Money para o cabeçalho
+                        sm_tier_icon  = sm_result["tier_icon"]
+                        sm_tier_label = sm_result["league_profile"]["tier"]
 
-                        # Formatação do Alerta
-                        msg = (
-                            f"🛰️ <b>KAIROS DEEP INTELLIGENCE (v3.0)</b> 🛰️\n\n"
-                            f"🏆 <b>Campeonato:</b> {league} {sm_tier_icon} [{sm_tier_label}]\n"
-                            f"⚽ <b>Partida:</b> {teams}\n"
-                            f"{ '🔢 <b>Placar Live:</b> ' + last_score + ' (' + time_info + ')' if match['is_live'] else '🕒 <b>Início:</b> ' + time_info }\n"
-                            f'🔗 <a href="{excapper_url}">VER NO EXCAPPER</a>\n\n'
-                            f"📊 <b>ANÁLISE (#AjusteBrutal):</b>\n"
-                            f"• <b>Insight:</b> {ai_data.get('reasoning', 'N/A')}\n"
-                            f"• <b>Risco:</b> {ai_data.get('risk', 'Médio')}\n\n"
-                            f"💰 <b>BET SUGGESTION:</b> {ai_data.get('betting_tip', 'N/A').upper()} @ {ai_data.get('suggested_odd', 'Live')}\n"
-                            f"⭐️ <b>Confiança:</b> {conf_val}/10 {stars}\n\n"
-                            f"📝 <b>Contexto dos Mercados:</b>\n"
-                            f"• {primary_anomaly['market']}: {primary_anomaly['reason']}\n"
+                        # Verdict → ícone
+                        verdict_map = {
+                            "SHARP_ACTION":       "🎯 SHARP ACTION",
+                            "INSTITUTIONAL_FLOW": "🏦 INSTITUTIONAL FLOW",
+                            "SUSPICIOUS":         "🚨 SUSPICIOUS",
+                            "NOISE":              "📉 NOISE",
+                        }
+                        verdict_str = verdict_map.get(
+                            str(ai_data.get("verdict", "")).upper(),
+                            f"🔍 {ai_data.get('verdict', 'N/A')}"
                         )
 
-                        if manipulation_labels:
-                            msg += f"• ⚠️ <b>Sinais:</b> {', '.join(manipulation_labels)}\n"
+                        # Headline de impacto (gerada pela IA ou fallback)
+                        headline = ai_data.get("alert_headline") or primary_anomaly["reason"]
+                        if len(headline) > 90:
+                            headline = headline[:87] + "…"
 
-                        msg += f'\n🔗 <a href="{primary_anomaly["bf_url"]}">ABRIR NA BETFAIR</a>'
+                        # Stake badge
+                        stake_raw = str(ai_data.get("stake_suggestion", "Mínimo")).lower()
+                        if "alto" in stake_raw:
+                            stake_badge = "🟢 ALTO"
+                        elif "normal" in stake_raw or "médio" in stake_raw or "medio" in stake_raw:
+                            stake_badge = "🟡 NORMAL"
+                        else:
+                            stake_badge = "🔴 MÍNIMO"
+
+                        # Mercados adicionais (cross-market resumido)
+                        cross_lines = ""
+                        if len(found_anomalies) > 1:
+                            cross_lines = "\n<b>🔀 Cross-Market:</b>\n"
+                            for anom in found_anomalies[1:4]:   # máx 3 extras
+                                adet = anom.get("details", {})
+                                cross_lines += (
+                                    f"  • <code>{anom['market']}</code> "
+                                    f"[{anom['selection']}] "
+                                    f"→ {adet.get('change_eur', 0):.0f}€ / Odd {adet.get('odds', '?')}\n"
+                                )
+
+                        # Sinais SM formatados
+                        sm_signals_str = ""
+                        for sig in sm_result.get("signals", []):
+                            sm_signals_str += f"  ├ <code>{sig['label']}</code>: {sig.get('description', '')}\n"
+
+                        # Labels de manipulação (detectores clássicos + SM filtrados)
+                        classic_labels = [
+                            l for l in manipulation_labels
+                            if not any(
+                                sm_kw in l
+                                for sm_kw in ["MARKET_DISPROPORTION", "LATE_GAME_SPIKE", "HT_BETFAIR_DROP"]
+                            )
+                        ]
+
+                        # ── Montagem final da mensagem ───────────────────────────────────
+                        msg = (
+                            f"🛰️ <b>KAIROS INTELLIGENCE</b> — <code>v3.1</code>\n"
+                            f"{'━' * 28}\n"
+                            f"<b>📣 {headline}</b>\n"
+                            f"{'━' * 28}\n\n"
+                            f"🏆 <b>Liga:</b> {league}  {sm_tier_icon} <code>[{sm_tier_label}]</code>\n"
+                            f"⚽ <b>Partida:</b> {teams}\n"
+                        )
+
+                        if match["is_live"]:
+                            msg += f"🔴 <b>Live:</b> <code>{last_score}</code>  ⏱ <code>{time_info}</code>\n"
+                        else:
+                            msg += f"🔵 <b>Horário:</b> <code>{time_info}</code>\n"
+
+                        msg += (
+                            f'🔗 <a href="{excapper_url}">Ver no Excapper</a>\n\n'
+                            f"{'─' * 28}\n"
+                            f"🧠 <b>VEREDITO IA:</b>  {verdict_str}\n"
+                            f"📌 <b>Análise:</b> {ai_data.get('reasoning', 'N/A')}\n\n"
+                            f"{'─' * 28}\n"
+                            f"💰 <b>APOSTA:</b>  <code>{str(ai_data.get('betting_tip', 'N/A')).upper()}</code>\n"
+                            f"🎯 <b>Odd Mín.:</b> <code>{ai_data.get('suggested_odd', 'Live')}</code>  "
+                            f"📊 <b>Stake:</b> {stake_badge}\n"
+                            f"⭐ <b>Confiança:</b> {conf_val}/10  {stars}\n"
+                            f"⚠️ <b>Risco:</b> {ai_data.get('risk', 'Médio')}\n"
+                        )
+
+                        # Bloco Smart Money (só se houver sinais)
+                        if sm_signals_str:
+                            msg += (
+                                f"\n{'─' * 28}\n"
+                                f"🔬 <b>SMART MONEY SIGNALS:</b>\n"
+                                f"{sm_signals_str}"
+                            )
+
+                        # Bloco cross-market
+                        if cross_lines:
+                            msg += cross_lines
+
+                        # Labels clássicos de manipulação
+                        if classic_labels:
+                            msg += (
+                                f"\n⚙️ <b>Detectores Ativos:</b>\n"
+                                + "".join(f"  • <code>{l}</code>\n" for l in classic_labels[:4])
+                            )
+
+                        # Rodapé com link Betfair
+                        msg += (
+                            f"\n{'━' * 28}\n"
+                            f'🔗 <a href="{primary_anomaly["bf_url"]}">⚡ ABRIR NA BETFAIR</a>'
+                        )
 
                         if send_telegram_alert(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, msg):
                             print(f"      [OK] Alerta enviado com sucesso para {teams}!")
