@@ -9,6 +9,7 @@ from .utils import load_json, save_json, send_telegram_alert
 from .analyzer import KairosAnalyzer
 from .sokkerpro_scraper import SokkerProScraper
 from .excapper_scraper import ExcapperScraper
+from .smart_money import run_smart_money_analysis, TIER_ICON
 
 # Carregar variáveis de ambiente
 load_dotenv()
@@ -79,7 +80,7 @@ async def main():
     print("==================================================\n")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
+        browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
             viewport={'width': 1280, 'height': 720},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
@@ -179,7 +180,7 @@ async def main():
                         # 4. Enriquecimento via SokkerPro (Stats & Pressure)
                         sp_data = None
                         pre_stats = None
-                        
+
                         # Extrair apenas o primeiro time para a busca no SokkerPro
                         # Algumas vezes o Excapper usa " vs ", outras vezes " - "
                         if " vs " in teams:
@@ -190,7 +191,7 @@ async def main():
                             away = teams.split(" - ")[1].strip()
                         else:
                             home, away = teams.strip(), ""
-                        
+
                         print(f"      [*] Buscando no SokkerPro por: '{home}'")
                         sp_page = await context.new_page()
                         try:
@@ -207,13 +208,11 @@ async def main():
                         is_late_game = False
                         if sp_data:
                             avg_appm = (sp_data['appm_5m']['home'] + sp_data['appm_5m']['away']) / 2
-                            # Nota: No momento o Excapper não retorna o minuto atual no snippet simplificado,
-                            # mas podemos inferir se o jogo está no final ou verificar no SokkerPro se disponível futuramente.
 
                         # Detectores de Manipulação (Smart Money)
                         manipulation_labels = []
                         pct_change = float(primary_anomaly['details']['change_pct'].replace("%", "").replace("-", "") or 0)
-                        
+
                         try:
                             current_odd = float(primary_anomaly['details']['odds'])
                         except:
@@ -222,7 +221,44 @@ async def main():
                         market_name_up = primary_anomaly['market'].upper()
                         selection_up = primary_anomaly['selection'].upper()
                         current_min = sp_data.get("minute", 0) if sp_data else 0
-                        
+
+                        # --- SMART MONEY (módulo externo — análise real pelos dados da anomalia) ---
+                        primary_market_flow = all_markets_data.get(
+                            primary_anomaly['market'], {}
+                        ).get("flow", [])
+                        league_name = match.get("league", "")
+                        is_halftime = ("HT" in str(match.get("time_text", "")).upper())
+
+                        sm_result = run_smart_money_analysis(
+                            flow_history=primary_market_flow,
+                            league_name=league_name,
+                            current_minute=current_min,
+                            is_halftime=is_halftime,
+                            current_odd=current_odd,
+                            primary_change_eur=primary_anomaly['details']['change_eur'],
+                            market_name=primary_anomaly['market'],
+                        )
+
+                        # Se o filtro de segurança descartar → pular este sinal
+                        if sm_result["safety_filtered"]:
+                            for reason in sm_result["filter_reasons"]:
+                                print(f"      [SAFE FILTER] {reason}")
+                            print(f"      [.] Sinal descartado pelos filtros de segurança Smart Money.")
+                            continue
+
+                        # Incorporar sinais Smart Money aos labels de manipulação
+                        for sm_signal in sm_result["signals"]:
+                            lbl = sm_signal.get("label", "SMART_MONEY")
+                            desc = sm_signal.get("description", "")
+                            manipulation_labels.append(f"{lbl}: {desc}")
+                            # Sinaliza nível máximo automaticamente
+                            level = 3
+                            print(f"      [SM] {sm_signal['description']}")
+
+                        # Expõe o contexto de liga (+tier) para uso no alerta
+                        league_tier = sm_result["league_profile"]["tier"]
+                        league_tier_icon = sm_result["tier_icon"]
+
                         # 1. Detector "HT Smart Money" & Over 0.5 HT Sneak
                         if "HALF TIME" in market_name_up or "1ST HALF" in market_name_up:
                             if "OVER 0.5" in selection_up and last_score == "0-0" and 35 <= current_min <= 45:
@@ -249,13 +285,13 @@ async def main():
                         if "HT/FT" in market_name_up:
                             if "/" in selection_up:
                                 parts = selection_up.split("/")
-                                if len(parts) >= 2 and parts[0].strip() != parts[1].strip(): 
+                                if len(parts) >= 2 and parts[0].strip() != parts[1].strip():
                                     manipulation_labels.append(f"HT_FT_TURNAROUND ({selection_up})")
                                     level = 3
 
                         # 5. Detector "High Odds Sniper" (Odds Altas > 4.0)
                         if current_odd >= 4.0:
-                            if not is_ocean: 
+                            if not is_ocean:
                                 manipulation_labels.append(f"HIGH_ODDS_SNIPER (Odd: {current_odd})")
                                 level = 3
                             else:
@@ -365,7 +401,7 @@ async def main():
                         league = match.get("league", "Futebol")
                         excapper_url = match.get("url", "https://www.excapper.com")
                         time_info = match["time_text"]
-                        
+
                         # Estrelas de confiança
                         try:
                             conf_val = int(ai_data.get("confidence", 7))
@@ -373,10 +409,16 @@ async def main():
                             conf_val = 7
                         stars = "⭐" * (conf_val // 2 if conf_val > 1 else 1)
 
+                        # Contexto de liquidez da liga para o alerta
+                        sm_profile = sm_result["league_profile"]
+                        sm_tier_icon = sm_result["tier_icon"]
+                        sm_tier_label = sm_profile["tier"]
+                        sm_spark_threshold = sm_profile["spark_threshold"]
+
                         # Formatação do Alerta
                         msg = (
-                            f"🛰️ <b>KAIROS DEEP INTELLIGENCE (v2.9.1)</b> 🛰️\n\n"
-                            f"🏆 <b>Campeonato:</b> {league}\n"
+                            f"🛰️ <b>KAIROS DEEP INTELLIGENCE (v3.0)</b> 🛰️\n\n"
+                            f"🏆 <b>Campeonato:</b> {league} {sm_tier_icon} [{sm_tier_label}]\n"
                             f"⚽ <b>Partida:</b> {teams}\n"
                             f"{ '🔢 <b>Placar Live:</b> ' + last_score + ' (' + time_info + ')' if match['is_live'] else '🕒 <b>Início:</b> ' + time_info }\n"
                             f'🔗 <a href="{excapper_url}">VER NO EXCAPPER</a>\n\n'
