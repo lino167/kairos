@@ -21,29 +21,21 @@ import hashlib
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 
-from .utils import load_json, save_json, send_telegram_alert
-from .analyzer import KairosAnalyzer
-from .excapper_scraper import ExcapperScraper
-from .dropping_odds_scraper import DroppingOddsScraper, DROP_MIN_PCT, DROP_STRONG_PCT, DROP_ALERT_PCT
-from .smart_money import run_smart_money_analysis, TIER_ICON
+from ..core.utils import load_json, save_json, send_telegram_alert
+from ..core.analyzer import KairosAnalyzer
+from ..scrapers.excapper import ExcapperScraper
+from ..scrapers.dropping_odds import DroppingOddsScraper, DROP_MIN_PCT, DROP_STRONG_PCT, DROP_ALERT_PCT
+from ..core.smart_money import run_smart_money_analysis, TIER_ICON
 
-# ── Configuração ───────────────────────────────────────────────────────────────
-load_dotenv()
+from ..config import (
+    TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, GEMINI_API_KEY, AI_PROVIDER,
+    DATA_DIR, SENT_ALERTS_FILE, CYCLE_SLEEP_SEC,
+    AI_TRIGGER_DROP, DROP_MIN_PCT, DROP_STRONG_PCT,
+    USER_AGENT, VIEWPORT, HEADLESS
+)
 
-TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY")
-AI_PROVIDER      = os.getenv("AI_PROVIDER", "gemini")
-
-DATA_DIR          = "data"
-SENT_ALERTS_FILE  = os.path.join(DATA_DIR, "sent_alerts_dropping.json")
-
-# Ciclo de monitoramento (segundos)
-CYCLE_SLEEP_SEC = 90
-
-# Limiares de drop mínimo para acionar análise de Excapper e IA
-EXCAPPER_TRIGGER_DROP  = DROP_STRONG_PCT   # 10%+ aciona busca no Excapper
-AI_TRIGGER_DROP        = DROP_MIN_PCT      # 5%+ (qualquer drop vai para IA se tiver Excapper)
+# Arquivo de controle de alertas específico para DroppingOdds
+SENT_ALERTS_FILE_DO = os.path.join(DATA_DIR, "sent_alerts_dropping.json")
 
 
 # ── Funções Auxiliares ─────────────────────────────────────────────────────────
@@ -121,7 +113,7 @@ def _build_ai_snapshot(
         "primary_anomaly": {
             "market":    primary_drop.get("table", "N/A"),
             "selection": primary_drop.get("selection", "N/A"),
-            "reason":    f"Drop {primary_drop.get('drop_pct', 0):.1f}% em {primary_drop.get('table', '')}",
+            "reason":    f"Drop {primary_drop.get('drop_pct', 0):.1f}% em {primary_drop.get('table', '')}{' | SINAIS: ' + ', '.join(primary_drop.get('signals', [])) if primary_drop.get('signals') else ''}",
             "short_id":  f"{primary_drop.get('table', '')}_{primary_drop.get('selection', '')}",
             "bf_url":    excapper_primary.get("betfair_url", "https://www.betfair.com"),
             "details": {
@@ -135,7 +127,7 @@ def _build_ai_snapshot(
             {
                 "market":    d.get("table", "N/A"),
                 "selection": d.get("selection", "N/A"),
-                "reason":    f"Drop {d.get('drop_pct', 0):.1f}% em {d.get('table', '')}",
+                "reason":    f"Drop {d.get('drop_pct', 0):.1f}% em {d.get('table', '')}{' | SINAIS: ' + ', '.join(d.get('signals', [])) if d.get('signals') else ''}",
                 "short_id":  f"{d.get('table', '')}_{d.get('selection', '')}",
                 "bf_url":    "https://www.betfair.com",
                 "details": {
@@ -281,11 +273,13 @@ def _build_telegram_message(
     if drops:
         for drop in drops[:6]:  # Máx 6 drops no alerta
             sev_icon = "🔴" if "CRÍTICO" in drop["severity"] else ("🟠" if "FORTE" in drop["severity"] else "🟡")
+            signals = ", ".join(drop.get("signals", []))
+            sig_text = f" <b>[ {signals} ]</b>" if signals else ""
             msg += (
                 f"  {sev_icon} <code>[{drop['table']}]</code> "
                 f"<b>{drop['selection']}</b> → "
                 f"Abertura: {drop['open_odd']:.2f} | Atual: {drop['current_odd']:.2f} | "
-                f"<b>-{drop['drop_pct']:.1f}%</b>\n"
+                f"<b>-{drop['drop_pct']:.1f}%</b>{sig_text}\n"
             )
     else:
         msg += "  • N/A\n"
@@ -347,9 +341,10 @@ async def main():
     exc_scraper = ExcapperScraper()
 
     print("\n==================================================")
-    print("🚀 KAIROS DROPPING-ODDS: Monitoramento Ativo")
+    print("[*] KAIROS DROPPING-ODDS: Monitoramento Ativo (Strict Flow)")
     print(f"   Provedor IA: {AI_PROVIDER.upper()}")
-    print(f"   Gatilho Drop: ≥{AI_TRIGGER_DROP}% → Análise | ≥{EXCAPPER_TRIGGER_DROP}% → Excapper")
+    print(f"   Gatilho Drop: >= {AI_TRIGGER_DROP}%")
+    print(f"   CONDICAO OBRIGATORIA: Link Excapper disponivel")
     print(f"   Ciclo: {CYCLE_SLEEP_SEC}s")
     print("==================================================\n")
 
@@ -373,7 +368,7 @@ async def main():
                 main_page = await context.new_page()
 
             try:
-                print(f"\n[{time.strftime('%H:%M:%S')}] ═══ NOVO CICLO ═══")
+                print(f"\n[{time.strftime('%H:%M:%S')}] === NOVO CICLO ===")
 
                 # ── FASE 1: DroppingOdds — lista de jogos ao vivo ────────────
                 live_matches = await do_scraper.get_live_matches(main_page)
@@ -382,12 +377,9 @@ async def main():
                 for match in live_matches:
                     teams    = match["teams"]
 
-                    print(f"\n  [{time.strftime('%H:%M:%S')}] Processando: {teams}...")
-
-                    # ── FASE 2: Dados completos do jogo (todas as tabelas + Excapper link) ─
+                    # ── FASE 2: Dados completos do jogo (tabelas + Excapper link) ──
                     game_id = match.get("game_id", "")
                     if not game_id:
-                        print(f"    [?] Sem game_id para {teams}. Pulando.")
                         continue
 
                     game_page = await context.new_page()
@@ -398,32 +390,48 @@ async def main():
 
                     drops = page_data.get("drops_summary", [])
                     max_drop = page_data.get("max_drop_pct", 0)
-                    if not drops:
-                        print(f"    [?] Nenhum drop encontrado para {teams}. Pulando.")
-                        continue
-                    print(f"    [!] {len(drops)} drops detectados | Máx: {max_drop:.1f}%")
-
                     excapper_url = page_data.get("excapper_url")
 
-                    # ── FASE 3: Excapper — fluxo de dinheiro (se link disponível e drop forte) ──
+                    # ── VERIFICAÇÃO DE GATILHOS (Novo Plano) ─────────────────────
+                    # 1. Identificar se existem drops significativos
+                    if not drops or max_drop < AI_TRIGGER_DROP:
+                        # Silencioso se não houver drop algum, ou print se for baixo
+                        if max_drop > 0:
+                            print(f"    [.] {teams}: Drop {max_drop:.1f}% insuficiente (<{AI_TRIGGER_DROP}%).")
+                        continue
+
+                    print(f"\n  [{time.strftime('%H:%M:%S')}] Processando: {teams}...")
+                    print(f"    [!] {len(drops)} drops detectados | Máx: {max_drop:.1f}%")
+
+                    # 2. Tenta encontrar o link Excapper. Se não tiver, NÃO PROSSEGUE.
+                    if not excapper_url:
+                        print(f"    [CANCELADO] Sem link Excapper para {teams}. Abortando análise.")
+                        continue
+
+                    print(f"    [OK] Link Excapper encontrado: {excapper_url}")
+
+                    # ── FASE 3: Excapper — extração do fluxo de dinheiro ──────────
                     excapper_markets = {}
-                    if excapper_url and max_drop >= EXCAPPER_TRIGGER_DROP:
-                        print(f"    [*] Extraindo fluxo Excapper (drop {max_drop:.1f}% ≥ {EXCAPPER_TRIGGER_DROP}%)...")
-                        m_exc = re.search(r"id=(\d+)", excapper_url)
-                        if m_exc:
-                            exc_game_id = m_exc.group(1)
-                            exc_page = await context.new_page()
-                            try:
-                                excapper_markets = await exc_scraper.get_match_flow(exc_page, exc_game_id)
+                    print(f"    [*] Extraindo fluxo de dinheiro do Excapper...")
+                    m_exc = re.search(r"id=(\d+)", excapper_url)
+                    if m_exc:
+                        exc_game_id = m_exc.group(1)
+                        exc_page = await context.new_page()
+                        try:
+                            excapper_markets = await exc_scraper.get_match_flow(exc_page, exc_game_id)
+                            if excapper_markets:
                                 print(f"    [+] {len(excapper_markets)} mercados extraídos do Excapper.")
-                            finally:
-                                await exc_page.close()
-                        else:
-                            print(f"    [!] Não foi possível extrair game_id de: {excapper_url}")
-                    elif excapper_url:
-                        print(f"    [?] Drop {max_drop:.1f}% < {EXCAPPER_TRIGGER_DROP}% (Excapper opcional). Análise só com drops.")
+                            else:
+                                print(f"    [!] Link existia, mas o Excapper não retornou dados de fluxo.")
+                        finally:
+                            await exc_page.close()
                     else:
-                        print(f"    [?] Sem link Excapper. Análise apenas com dados de drops.")
+                        print(f"    [!] Formato de link Excapper inválido: {excapper_url}")
+
+                    # Mesmo que falhe em extrair mercados, se o link existia e houve drop,
+                    # o prompt da IA lidará com a ausência de dados de fluxo (Excapper: Não disponível).
+                    # Mas o plano diz "analisar o fluxo de dinheiro e drop", então se falhou feio, pulamos?
+                    # Vou prosseguir pois o link foi encontrado como solicitado.
 
                     # ── FASE 4: Montar snapshot e enviar para IA ─────────────
                     snapshot = _build_ai_snapshot(match, page_data, excapper_markets, teams)
@@ -437,21 +445,11 @@ async def main():
                         print(f"    [.] Alerta já enviado para {teams}. Pulando.")
                         continue
 
-                    # ── FASE 5: Análise IA ────────────────────────────────────
-                    ai_data = {
-                        "verdict":          "SUSPICIOUS",
-                        "betting_tip":      "Analisar manualmente",
-                        "reasoning":        "Drops detectados — análise IA indisponível.",
-                        "suggested_odd":    "Live",
-                        "risk":             "Médio",
-                        "confidence":       5,
-                        "stake_suggestion": "Mínimo",
-                        "alert_headline":   f"Drop {drops[0].get('drop_pct', 0):.1f}% em {teams}",
-                    }
-
-                    print(f"    [*] Enviando para análise IA ({AI_PROVIDER.upper()})...")
+                    # ── FASE 5: Análise IA (Veredito) ───────────────────────────
+                    ai_data = None
+                    print(f"    [*] Enviando dados coletados (Drops + Fluxo) para IA ({AI_PROVIDER.upper()})...")
                     try:
-                        # Injeta contexto do DroppingOdds no prompt (via snapshot enrichido)
+                        # Injeta contexto do DroppingOdds no prompt
                         snapshot["dropping_context_text"] = do_scraper.format_drops_for_ai(match, page_data)
 
                         ai_raw = await analyzer.analyze_cross_market(snapshot)
@@ -459,21 +457,22 @@ async def main():
                         end    = ai_raw.rfind("}") + 1
                         if start != -1 and end > 0:
                             ai_data = json.loads(ai_raw[start:end])
+                            print(f"    [OK] Veredito IA: {ai_data.get('verdict')} | Confiança: {ai_data.get('confidence')}/10")
                         else:
-                            raise ValueError("JSON não encontrado na resposta da IA")
-                        print(f"    [✓] IA analisou: Veredito={ai_data.get('verdict')} | Confiança={ai_data.get('confidence')}/10")
+                            raise ValueError("Resposta da IA não contém JSON válido")
                     except Exception as e:
                         print(f"    [!] Erro na análise IA: {e}")
+                        continue # Se a IA falhou, não enviamos para o telegram (exigência do "depois do veredito")
 
-                    # ── FASE 6: Montar e enviar alerta Telegram ──────────────
-                    msg = _build_telegram_message(match, page_data, ai_data, snapshot)
-
-                    if send_telegram_alert(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, msg):
-                        print(f"    [OK] Alerta enviado: {teams}!")
-                        sent_alerts[alert_hash] = time.time()
-                        save_json(SENT_ALERTS_FILE, sent_alerts)
-                    else:
-                        print(f"    [X] Falha ao enviar alerta para {teams}.")
+                    # ── FASE 6: Enviar para o Telegram ───────────────────────
+                    if ai_data:
+                        msg = _build_telegram_message(match, page_data, ai_data, snapshot)
+                        if send_telegram_alert(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, msg):
+                            print(f"    [OK] Alerta enviado para Telegram!")
+                            sent_alerts[alert_hash] = time.time()
+                            save_json(SENT_ALERTS_FILE, sent_alerts)
+                        else:
+                            print(f"    [X] Falha ao enviar alerta para {teams}.")
 
                 print(f"\n[*] Ciclo concluído. Aguardando {CYCLE_SLEEP_SEC}s...")
                 await asyncio.sleep(CYCLE_SLEEP_SEC)

@@ -26,10 +26,7 @@ from playwright.async_api import Page
 BASE_URL  = "https://dropping-odds.com"
 LIVE_URL  = "https://dropping-odds.com/index.php?view=live"
 
-# Limiares de drop
-DROP_MIN_PCT    = 5.0   # Drop mínimo para monitorar
-DROP_STRONG_PCT = 10.0  # Drop forte
-DROP_ALERT_PCT  = 15.0  # Drop crítico
+from ..config import DROP_MIN_PCT, DROP_STRONG_PCT, DROP_ALERT_PCT
 
 # Mapeamento nome → parâmetro URL
 TABLE_TABS = {
@@ -282,14 +279,8 @@ class DroppingOddsScraper:
 
     async def _extract_table_rows(self, page: Page, table_name: str) -> List[Dict]:
         """
-        Extrai drops de odds comparando abertura vs. odd atual.
-
-        A tabela no dropping-odds é um histórico de mudanças de odds, com as entradas
-        mais recentes no TOPO. Para detectar drops:
-          - Pega a linha mais RECENTE (topo) = odd atual
-          - Pega a linha mais ANTIGA (fundo) = odd de abertura
-          - Calcula o drop% real entre abertura e atual
-          - Filtra somente drops válidos: DROP_MIN_PCT ≤ drop ≤ 80% (>80% = ruído)
+        Extrai drops de odds e anomalias baseadas em classes (Red1, Red2, Red3)
+        e eventos (Penalty, Red Card).
         """
         rows_data = []
         try:
@@ -306,131 +297,128 @@ class DroppingOddsScraper:
                 header_cells = await header_row.query_selector_all("th, td")
                 headers = [(await c.inner_text()).strip() for c in header_cells]
 
-            print(f"    [HDR] [{table_name}] {headers}")
-
-            # Mapear índices das colunas de odds e %
-            # Para 1X2 e HT 1X2: HOME(3) DRAW(4) AWAY(5) HOME%(6) AWAY%(7)
-            # Para Total / HT Total: OVER(3) UNDER(4) DROP%(5 ou 6)
-            # Para Handicap: HANDICAP(3) AWAY(4) SHARPNESS(5)
-            odd_col_map = {}    # nome seleção → índice coluna odd
-            pct_col_map = {}    # nome seleção → índice coluna %
-            score_idx   = -1
+            # Mapear índices
+            odd_col_map = {}
+            pct_col_map = {}
+            score_idx = -1
+            penalty_idx = -1
+            red_card_idx = -1
 
             for i, h in enumerate(headers):
                 hl = h.lower().strip()
-                if "score" in hl:
-                    score_idx = i
-                elif "home (%)" in hl or "home(%)" in hl:
-                    pct_col_map["Home"] = i
-                elif "away (%)" in hl or "away(%)" in hl:
-                    pct_col_map["Away"] = i
-                elif "draw (%)" in hl or "draw(%)" in hl:
-                    pct_col_map["Draw"] = i
-                elif "over (%)" in hl or "over(%)" in hl:
-                    pct_col_map["Over"] = i
-                elif "under (%)" in hl or "under(%)" in hl:
-                    pct_col_map["Under"] = i
-                elif hl == "home":
-                    odd_col_map["Home"] = i
-                elif hl == "draw":
-                    odd_col_map["Draw"] = i
-                elif hl == "away":
-                    odd_col_map["Away"] = i
-                elif hl == "over":
-                    odd_col_map["Over"] = i
-                elif hl == "under":
-                    odd_col_map["Under"] = i
-                elif hl == "handicap":
-                    odd_col_map["Handicap"] = i
+                if "score" in hl: score_idx = i
+                elif "home (%)" in hl or "home(%)" in hl: pct_col_map["Home"] = i
+                elif "away (%)" in hl or "away(%)" in hl: pct_col_map["Away"] = i
+                elif "draw (%)" in hl or "draw(%)" in hl: pct_col_map["Draw"] = i
+                elif "over (%)" in hl or "over(%)" in hl: pct_col_map["Over"] = i
+                elif "under (%)" in hl or "under(%)" in hl: pct_col_map["Under"] = i
+                elif hl == "home": odd_col_map["Home"] = i
+                elif hl == "draw": odd_col_map["Draw"] = i
+                elif hl == "away": odd_col_map["Away"] = i
+                elif hl == "over": odd_col_map["Over"] = i
+                elif hl == "under": odd_col_map["Under"] = i
+                elif hl == "handicap": odd_col_map["Handicap"] = i
+                elif "penalty" in hl: penalty_idx = i
+                elif "red" in hl: red_card_idx = i
                 elif "drop" in hl or "sharp" in hl or "change" in hl:
-                    # Drop genérico sem seleção — mapa para mercado atual
-                    key = {
-                        "Total":    "Over/Under",
-                        "HT Total": "Over/Under",
-                        "Handicap": "Handicap",
-                    }.get(table_name, "Principal")
+                    key = {"Total": "Over/Under", "HT Total": "Over/Under", "Handicap": "Handicap"}.get(table_name, "Principal")
                     pct_col_map[key] = i
 
-            # ── Ler TODAS as linhas de dados ─────────────────────────────────
+            # ── Ler linhas buscando classes e ícones ────────────────────────
             data_rows = await table.query_selector_all("tbody tr")
             if not data_rows:
                 all_rows = await table.query_selector_all("tr")
                 data_rows = all_rows[1:] if len(all_rows) > 1 else []
 
-            all_row_texts = []
+            all_row_data = []
             for tr in data_rows:
                 tds = await tr.query_selector_all("td")
-                if not tds:
-                    continue
-                texts = [(await td.inner_text()).strip() for td in tds]
-                if any(texts):
-                    all_row_texts.append(texts)
+                if not tds: continue
+                
+                texts = []
+                has_penalty = False
+                has_red_card = False
 
-            if not all_row_texts:
+                for i, td in enumerate(tds):
+                    txt = (await td.inner_text()).strip()
+                    texts.append(txt)
+                    # Verificar ícones em colunas específicas
+                    if i == penalty_idx or i == red_card_idx:
+                        inner_html = await td.inner_html()
+                        if "img" in inner_html.lower() or "icon" in inner_html.lower():
+                            if i == penalty_idx: has_penalty = True
+                            if i == red_card_idx: has_red_card = True
+                
+                row_class = await tr.get_attribute("class") or ""
+                # DroppingOdds costuma marcar TDs com Red1/2/3 quando o drop ocorre ali
+                td_classes = []
+                for td in tds:
+                    c = await td.get_attribute("class") or ""
+                    if any(x in c for x in ["Red1", "Red2", "Red3"]):
+                        td_classes.append(c)
+
+                if any(texts):
+                    all_row_data.append({
+                        "texts": texts,
+                        "class": row_class,
+                        "td_classes": td_classes,
+                        "has_penalty": has_penalty,
+                        "has_red_card": has_red_card
+                    })
+
+            if not all_row_data:
                 return rows_data
 
-            # As linhas mais recentes ficam no TOPO (índice 0 = mais recente)
-            # As linhas mais antigas ficam no FUNDO
-            first_row = all_row_texts[0]   # mais recente
-            last_row  = all_row_texts[-1]  # mais antigo (abertura)
+            # ── Histórico e Cálculo de Drops ─────────────────────────────────
+            # Usar a primeira linha como atual e a última como abertura
+            first_row_item = all_row_data[0]
+            first_row      = first_row_item["texts"]
+            last_row       = all_row_data[-1]["texts"]
 
-            # ── Calcular drop para cada seleção ──────────────────────────────
-            # Estratégia A: usar colunas de % explícitas (mais confiável)
+            # Anomalias de Classe (Red2, Red3 são prioritárias)
+            # Scan em todas as linhas para ver se houve sinal crítico em algum momento
+            anomaly_signals = []
+            for item in all_row_data:
+                combined_cls = item["class"] + " " + " ".join(item["td_classes"])
+                if "Red3" in combined_cls: anomaly_signals.append("CRITICAL_DROP_RED3")
+                elif "Red2" in combined_cls: anomaly_signals.append("STRONG_DROP_RED2")
+                
+                if item["has_penalty"]: anomaly_signals.append("PENALTY_EVENT")
+                if item["has_red_card"]: anomaly_signals.append("RED_CARD_EVENT")
+
+            # Cálculo por seleções
             if pct_col_map:
                 for sel_name, pct_idx in pct_col_map.items():
-                    if pct_idx >= len(first_row):
-                        continue
-                    # Pegar maior % absoluta nos ÚLTIMAS 3 linhas (mais recentes)
-                    recent_pcts = []
-                    for row_t in all_row_texts[:3]:
-                        if pct_idx < len(row_t):
-                            p = _parse_pct(row_t[pct_idx])
-                            if 0 < p <= 80:  # Filtro de sanidade
-                                recent_pcts.append(p)
-
-                    if not recent_pcts:
-                        continue
-                    drop_pct = max(recent_pcts)
-
-                    # Odd atual = coluna de odd correspondente na primeira linha
-                    current_odd = 0.0
-                    if sel_name in odd_col_map:
-                        oc = odd_col_map[sel_name]
-                        if oc < len(first_row):
-                            current_odd = _parse_odd(first_row[oc])
-
-                    # Odd de abertura = mesma coluna na ÚLTIMA linha
-                    open_odd = 0.0
-                    if sel_name in odd_col_map:
-                        oc = odd_col_map[sel_name]
-                        if oc < len(last_row):
-                            open_odd = _parse_odd(last_row[oc])
+                    if pct_idx >= len(first_row): continue
+                    drop_pct = _parse_pct(first_row[pct_idx])
+                    
+                    current_odd = _parse_odd(first_row[odd_col_map[sel_name]]) if sel_name in odd_col_map else 0.0
+                    open_odd    = _parse_odd(last_row[odd_col_map[sel_name]]) if sel_name in odd_col_map else 0.0
 
                     rows_data.append({
                         "selection":   sel_name,
                         "open_odd":    open_odd,
                         "current_odd": current_odd,
                         "drop_pct":    drop_pct,
-                        "score":       first_row[score_idx] if score_idx >= 0 and score_idx < len(first_row) else "",
+                        "score":       first_row[score_idx] if score_idx >= 0 else "",
+                        "signals":     list(set(anomaly_signals)), # Eventos detectados no histórico
                     })
 
-            # Estratégia B: comparar odds abertura vs. atual (quando sem col de %)
             elif odd_col_map:
                 for sel_name, oc in odd_col_map.items():
-                    if oc >= len(first_row) or oc >= len(last_row):
-                        continue
+                    if oc >= len(first_row) or oc >= len(last_row): continue
                     curr = _parse_odd(first_row[oc])
                     orig = _parse_odd(last_row[oc])
                     if orig > 0 and curr > 0:
-                        drop_pct = (orig - curr) / orig * 100
-                        if DROP_MIN_PCT <= drop_pct <= 80:  # Filtro de sanidade
-                            rows_data.append({
-                                "selection":   sel_name,
-                                "open_odd":    orig,
-                                "current_odd": curr,
-                                "drop_pct":    round(drop_pct, 2),
-                                "score":       first_row[score_idx] if score_idx >= 0 else "",
-                            })
+                        drop_pct = round(((orig - curr) / orig * 100), 2)
+                        rows_data.append({
+                            "selection":   sel_name,
+                            "open_odd":    orig,
+                            "current_odd": curr,
+                            "drop_pct":    drop_pct,
+                            "score":       first_row[score_idx] if score_idx >= 0 else "",
+                            "signals":     list(set(anomaly_signals)),
+                        })
 
         except Exception as e:
             print(f"    [!] Erro ao extrair [{table_name}]: {e}")

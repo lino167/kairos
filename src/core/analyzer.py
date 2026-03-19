@@ -48,10 +48,12 @@ class BaseAIProvider(ABC):
         if do_drops:
             drop_ctx = "DROPS DE ODDS DETECTADOS (DroppingOdds.com):\n"
             for drop in do_drops[:6]:
+                signals = ", ".join(drop.get("signals", []))
+                sig_text = f" | [!] SINAIS: {signals}" if signals else ""
                 drop_ctx += (
                     f"  • [{drop.get('table', 'N/A')}] {drop.get('selection', 'N/A')} → "
                     f"Abertura: {drop.get('open_odd', 0):.2f} | Atual: {drop.get('current_odd', 0):.2f} | "
-                    f"Queda: -{drop.get('drop_pct', 0):.1f}% {drop.get('severity', '')}\n"
+                    f"Queda: -{drop.get('drop_pct', 0):.1f}% {drop.get('severity', '')}{sig_text}\n"
                 )
         elif do_context_text:
             drop_ctx = f"CONTEXTO DROPPINGODDS:\n{do_context_text}\n"

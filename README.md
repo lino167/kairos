@@ -43,10 +43,14 @@ GEMINI_API_KEY=sua_chave_gemini
 
 ## 🚀 Como Usar
 
-Para iniciar o monitoramento:
-
+Para iniciar o monitoramento principal (DroppingOdds):
 ```bash
-python -m src.main
+python -m src.main --mode dropping
+```
+
+Para o monitoramento legado (Excapper + SokkerPro):
+```bash
+python -m src.main --mode legacy
 ```
 
 ## 📁 Estrutura do Projeto
@@ -54,13 +58,22 @@ python -m src.main
 ```text
 Kairos/
 ├── src/
-│   ├── main.py        # Orquestrador do sistema
-│   ├── analyzer.py    # Lógica de IA do Gemini
-│   ├── scraper.py     # Automação Playwright
-│   └── utils.py       # Funções auxiliares e notificações
-├── data/              # Logs de anomalias (patterns_log.json)
-├── .env               # Variáveis de ambiente secretas
-└── requirements.txt   # Dependências do projeto
+│   ├── main.py              # Roteador principal (Entrada)
+│   ├── config.py            # Central de limites e configurações
+│   ├── core/
+│   │   ├── analyzer.py      # Lógica de IA (Gemini/DeepSeek)
+│   │   ├── smart_money.py   # Análise Smart Money e Volume
+│   │   └── utils.py         # JSON e Telegram Helpers
+│   ├── scrapers/
+│   │   ├── dropping_odds.py # Scraper DroppingOdds.com
+│   │   ├── excapper.py      # Scraper Money Flow
+│   │   └── sokkerpro.py     # Scraper de Stats de Campo
+│   └── flows/
+│       ├── dropping_flow.py # Fluxo sugerido (DO -> Excapper -> AI)
+│       └── legacy_flow.py   # Fluxo legado (Excapper -> SP -> AI)
+├── data/                    # Logs de anomalias (sent_alerts.json)
+├── .env                     # Variáveis de ambiente
+└── requirements.txt         # Dependências do projeto
 ```
 
 ---
