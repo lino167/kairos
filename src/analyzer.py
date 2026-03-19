@@ -41,7 +41,40 @@ class BaseAIProvider(ABC):
             for sig in sm_signals:
                 league_ctx += f"    — [{sig.get('label')}] {sig.get('description', '')}\n"
 
-        # ── Fluxo Principal (Excapper) ──────────────────────────────────────
+        # ── Dados DroppingOdds (fonte de drops) ──────────────────────────────
+        do_drops = snapshot.get("dropping_odds_drops", [])
+        do_context_text = snapshot.get("dropping_context_text", "")
+
+        if do_drops:
+            drop_ctx = "DROPS DE ODDS DETECTADOS (DroppingOdds.com):\n"
+            for drop in do_drops[:6]:
+                drop_ctx += (
+                    f"  • [{drop.get('table', 'N/A')}] {drop.get('selection', 'N/A')} → "
+                    f"Abertura: {drop.get('open_odd', 0):.2f} | Atual: {drop.get('current_odd', 0):.2f} | "
+                    f"Queda: -{drop.get('drop_pct', 0):.1f}% {drop.get('severity', '')}\n"
+                )
+        elif do_context_text:
+            drop_ctx = f"CONTEXTO DROPPINGODDS:\n{do_context_text}\n"
+        else:
+            drop_ctx = ""
+
+        # ── Fluxo Excapper (fluxo de dinheiro associado) ──────────────────────
+        exc_markets = snapshot.get("excapper_markets", {})
+        exc_flow_text = snapshot.get("primary_excapper_market", "")
+        pri_flow = snapshot.get("primary_excapper_flow", [])
+
+        if pri_flow:
+            exc_ctx = f"FLUXO DE DINHEIRO (Excapper — mercado: {exc_flow_text}):\n"
+            for entry in pri_flow[:5]:
+                exc_ctx += (
+                    f"  • [{entry.get('time', 'N/A')} | {entry.get('score', 'N/A')}] "
+                    f"{entry.get('selection', 'N/A')}: "
+                    f"{entry.get('change_eur', 0):.0f}€ | Odd {entry.get('odds', 'N/A')} ({entry.get('change_pct', 'N/A')})\n"
+                )
+        else:
+            exc_ctx = "FLUXO EXCAPPER: Não disponível (link não encontrado na página do jogo).\n"
+
+        # ── Fluxo Principal (Excapper via análise clássica) ───────────────────
         primary      = snapshot.get("primary_anomaly", {})
         all_anomalies = snapshot.get("all_anomalies", [])
         det           = primary.get("details", {})
@@ -122,22 +155,27 @@ class BaseAIProvider(ABC):
 
         # ── SISTEMA DE PROMPT ───────────────────────────────────────────────
         # Ajusta instruções conforme o status do jogo
+        has_dropping_data = bool(do_drops)
+        has_excapper_flow = bool(pri_flow)
+
         if is_live:
             mission = (
                 "MISSÃO DE ANÁLISE (LIVE):\n"
-                "1. CORRELAÇÃO: O volume do mercado principal confirma ou contradiz os dados de campo (APPM, AP)?\n"
-                "2. PRESSÃO vs FLUXO: A equipe que recebe o dinheiro tem pressão de campo correspondente?\n"
+                "1. DROPS: Analise os drops de odds nas tabelas do DroppingOdds — são moves de sharp ou mercado natural?\n"
+                "2. FLUXO vs DROP: O fluxo de dinheiro do Excapper confirma os drops detectados? Os dois apontam para a mesma direção?\n"
                 "3. TIMING: O minuto do jogo é crítico? (pressão no 75+, HT, final de set)?\n"
-                "4. SMART MONEY: Os sinais detectados (Desproporção, Pico Tardio, Drop HT) são convergentes?\n"
-                "5. VEREDITO: Movimento de 'Sharp Bettor' (insider) ou ruído de apostador comum?\n"
+                "4. CROSS-TABLE: Se drops aparecem em múltiplas tabelas (1X2 + Total) simultaneamente, é sinal mais forte.\n"
+                "5. SMART MONEY: Os sinais de desproporção, pico tardio ou drop HT são convergentes com o drop?\n"
+                "6. VEREDITO: Movimento de 'Sharp Bettor' (insider/sindicato) ou correção natural de mercado?\n"
             )
         else:
             mission = (
                 "MISSÃO DE ANÁLISE (PRÉ-JOGO):\n"
-                "1. INFO PRIVILEGIADA: A queda de odd sem jogo iniciado indica insider ou modelo quant?\n"
-                "2. CROSS-MARKET: Outros mercados confirmam a direção? (ex: BTTS + Over 2.5 caindo juntos)\n"
-                "3. CONTEXTO HISTÓRICO: O H2H/médias justificam o movimento financeiro?\n"
-                "4. VEREDITO: É movimento de sindicato (Oceano) ou apostador sharp isolado (Piscina)?\n"
+                "1. DROPS PRÉ-JOGO: A queda de odd nas tabelas sem jogo iniciado indica insider ou modelo quant?\n"
+                "2. CROSS-TABLE: Múltiplos mercados com drop simultâneo (1X2 + Total + HT) reforçam o sinal.\n"
+                "3. FLUXO EXCAPPER: O dinheiro confirma a direção dos drops? Qual mercado recebe mais volume?\n"
+                "4. CONTEXTO: H2H e médias históricas justificam o movimento?\n"
+                "5. VEREDITO: É movimento de sindicato (Oceano) ou apostador sharp isolado (Piscina)?\n"
             )
 
         # Instrução de formato — mais campos para enriquecer o alerta
@@ -157,13 +195,15 @@ class BaseAIProvider(ABC):
         )
 
         return (
-            "Você é o KAIROS — sistema de análise de Smart Money, fluxo institucional e apostas.\n"
-            "Sua missão é transformar dados brutos de fluxo financeiro e campo em uma análise profissional\n"
-            "e acionável, com foco em 'Dinheiro Inteligente' e detecção de movimento de insiders.\n\n"
+            "Você é o KAIROS — sistema de análise de Smart Money, drops de odds e fluxo institucional.\n"
+            "Sua missão é cruzar dados de DroppingOdds (drops de odds) com fluxo de dinheiro (Excapper)\n"
+            "para gerar análises profissionais e acionáveis, detectando movimentos de insiders e sharp bettors.\n\n"
             f"═══════════════════════════════════════\n"
             f"PARTIDA: {snapshot['match_name']}\n"
             f"STATUS: {status} | Minuto: {match_min}' | Placar: {score}\n"
             f"═══════════════════════════════════════\n\n"
+            f"{drop_ctx}\n"
+            f"{exc_ctx}\n"
             f"{league_ctx}\n"
             f"{flow_ctx}\n"
             f"{strat_ctx}\n"
